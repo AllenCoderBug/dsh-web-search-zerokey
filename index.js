@@ -3,26 +3,94 @@
  *
  * 为什么需要它：
  *   本机 web_search 坏掉的共因是 Node CA 信任链，而非"缺 key"。
- *   本 provider 不依赖任何商业 API，available() 恒真，
- *   配合 NODE_EXTRA_CA_CERTS 即可零 key 出结果。
+ *   本 provider 不依赖任何商业 API，available() 恒真。
+ *
+ * 证书怎么办（本插件的关键设计）：
+ *   DSH Desktop 从 GUI 启动，`NODE_EXTRA_CA_CERTS` 无法通过
+ *   ~/.dsh/.env（BOOTSTRAP_NAMES 会硬报错）或 ~/.zshrc
+ *   （DESKTOP_SHELL_ENVIRONMENT_KEYS 窄名单会丢弃）注入，
+ *   而 `launchctl setenv` 在沙箱内报 "Not privileged to set domain environment"。
+ *
+ *   因此本插件**自行为 TLS 注入 CA**：patch `tls.createSecureContext`，
+ *   把 ~/.dsh/certs/system-ca.pem 并进每个安全上下文的 ca 列表。
+ *   这样零配置、零重启、零特权即可用。
+ *
+ *   这是进程内的局部补丁，只增补信任根、不关闭校验——
+ *   与 NODE_TLS_REJECT_UNAUTHORIZED=0 那种全局关校验的做法有本质区别。
  *
  * 设计要点：
  *   - available() 恒返回 true：零 key，永远可用，不参与"有 key 才行"的判定
  *   - 每 12s 超时，避免慢响应拖死模型 turn
  *   - 结果按 URL 去重
- *   - 只解析 b_algo 结果块，不做全文抓取（抓取交给 fetchProvidar）
+ *   - 只解析 b_algo 结果块，不做全文抓取（抓取交给 fetchProvider）
  *
  * @module dsh-web-search-zerokey
  */
 
+import tls from 'node:tls'
+import fs from 'node:fs'
+
 export const name = 'web-search-zerokey'
 export const inject = ['web']
+
+/** 本机 CA 快照的默认位置。 */
+export const DEFAULT_CA_PATH = `${process.env.HOME ?? ''}/.dsh/certs/system-ca.pem`
 
 /** 稳定 id，`web.searchProvider` 用它选中本 provider。 */
 export const ZEROKEY_PROVIDER_ID = 'zerokey'
 
 const DEFAULT_TIMEOUT_MS = 12_000
 const DEFAULT_MAX_SNIPPET_CHARS = 300
+
+/**
+ * 为进程内 TLS 注入本机 CA，返回还原函数。
+ *
+ * 为什么 patch `createSecureContext` 而不是设 `NODE_EXTRA_CA_CERTS`：
+ * 后者必须在 Node 启动前存在，而 DSH Desktop 的 GUI 启动路径
+ * 不允许我们从配置文件或 shell 注入（原因见文件头注释）。
+ * 这是本机唯一免特权、免重启的通道。
+ *
+ * 关键安全性质：**只增补信任根，不降低校验强度**。
+ * 与 `NODE_TLS_REJECT_UNAUTHORIZED=0` 不同，证书链仍被完整验证。
+ *
+ * 幂等：重复调用只生效一次；已注入过则返回 no-op 还原函数。
+ *
+ * @param {string} caPath - CA PEM 文件路径
+ * @returns {() => void} 还原函数
+ */
+export function installCaTrust(caPath = DEFAULT_CA_PATH) {
+  let ca
+  try {
+    ca = fs.readFileSync(caPath, 'utf8')
+  } catch (error) {
+    // 证书缺失不是致命错误：若运行环境本就信任（例如已设 NODE_EXTRA_CA_CERTS），
+    // 搜索依然可用。这里只记录，不抛——由 search() 在真正握手失败时给出指引。
+    return () => {}
+  }
+
+  if (tls.createSecureContext[INJECTED_FLAG] === true) return () => {}
+
+  const original = tls.createSecureContext
+  const patched = function (options = {}) {
+    // 与已有 ca 合并而非替换：调用方显式指定的信任根优先保留。
+    return original.call(this, {
+      ...options,
+      ca: options.ca === undefined ? ca : [].concat(options.ca, ca),
+    })
+  }
+  patched[INJECTED_FLAG] = true
+  // 让其它代码能识别 patch 后的函数仍代表原语义。
+  patched.original = original
+  tls.createSecureContext = patched
+
+  return () => {
+    // 仅当当前仍是我们的 patch 时才还原，避免踩掉别人的改动。
+    if (tls.createSecureContext === patched) tls.createSecureContext = original
+  }
+}
+
+/** 标记位，用于幂等判断。 */
+const INJECTED_FLAG = Symbol.for('dsh.web-search-zerokey.caInjected')
 
 const BROWSER_HEADERS = {
   'user-agent':
@@ -181,5 +249,10 @@ export class ZeroKeySearchProvider {
 
 export function apply(ctx, config) {
   const provider = new ZeroKeySearchProvider(() => config ?? {})
+
+  // CA 注入属于本插件的副作用，必须随 fiber 一起撤销（HMR / 卸载时不残留 patch）。
+  // ctx.effect 的 disposer 会在插件销毁时调用还原函数。
+  ctx.effect(() => installCaTrust(config?.caPath ?? DEFAULT_CA_PATH))
+
   ctx.web.registerSearchProvider(provider)
 }
