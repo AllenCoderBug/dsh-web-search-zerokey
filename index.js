@@ -24,6 +24,19 @@
  *   - 结果按 URL 去重
  *   - 只解析 b_algo 结果块，不做全文抓取（抓取交给 fetchProvider）
  *
+ * 多源增强（v0.2.0）：
+ *   Bing 单引擎对中文/通用查询足够，但对**技术查询**会漏掉社区讨论与代码仓库。
+ *   故当查询被判定为技术类时，并行叠加两个零 key 源：
+ *     - Hacker News（Algolia API）：真人技术讨论，带热度权重，无 key 无限流困扰
+ *     - GitHub Search：仓库检索，质量高但**匿名限流仅 10 次/小时**
+ *
+ *   三条硬约束（决定了实现形态）：
+ *     1. **Bing 永远是主体**，增强源失败绝不影响主结果 —— 任何增强源异常都只是少几条。
+ *     2. **GitHub 有额度**，故在进程内做额度感知：连续 403/429 后退避，避免把额度打光
+ *        后连累后续查询（见 rateLimit 状态机）。
+ *     3. **不引入英文源到中文查询** —— 否则中文搜索质量反而下降。路由判定必须保守：
+ *        拿不准就不增强。
+ *
  * @module dsh-web-search-zerokey
  */
 
@@ -169,16 +182,185 @@ export function parseBingHtml(html, maxResults, maxSnippetChars) {
   return { sources, truncated: false }
 }
 
+// ---------------------------------------------------------------------------
+// 多源增强
+// ---------------------------------------------------------------------------
+
 /**
- * 零 key 搜索 provider。
+ * 技术类查询的判定信号。
  *
- * 选项以 thunk 传入，使设置层的改动能抵达下一次搜索而无需重启。
+ * 设计取舍：**宁可漏判，不可误判**。
+ * 误判（把中文通用查询当技术查询）会把英文技术源的结果混进中文结果里，
+ * 让用户看到一堆看不懂的英文标题 —— 那比"少几个增强源"糟得多。
+ * 所以只在出现明确的代码/技术标记时才判为 true，且要求查询本身不是中文长句。
  */
+const TECH_SIGNALS = [
+  /[a-z][A-Z]/, // camelCase / PascalCase
+  /[a-z]+_[a-z]+/i, // snake_case
+  /\b\w+\.(js|ts|tsx|jsx|py|go|rs|java|rb|c|cpp|h|json|ya?ml|toml|md)\b/i, // 文件名
+  /\b[a-z]+\.[a-z]+\.[a-z]+\b/i, // 命名空间 a.b.c
+  /\w+\(\)/, // 函数调用
+  /\b(api|sdk|cli|npm|pnpm|yarn|pip|docker|k8s|kubernetes|git|regex|sql|http|json|yaml|html|css|react|vue|node|python|rust|golang|typescript|javascript|error|exception|stack ?trace|compile|build|deploy|plugin|framework|library|package|module|function|class|interface|async|await|promise|webpack|vite|eslint|jest|pytest|mcp|cordis|harness)\b/i,
+  /\bv?\d+\.\d+(\.\d+)?\b/, // 版本号
+  /\b[45]\d{2}\b/, // HTTP 错误码
+]
+
+/** 判定一个查询是否值得启用技术类增强源。 */
+export function isTechQuery(query) {
+  const q = String(query ?? '').trim()
+  if (q.length === 0) return false
+
+  // 中文长句（含 ≥4 个中日韩字符）通常是人话提问，不是代码检索。
+  const cjk = (q.match(/[\u4e00-\u9fff\u3040-\u30ff]/g) ?? []).length
+  if (cjk >= 4) return false
+
+  return TECH_SIGNALS.some((re) => re.test(q))
+}
+
+/**
+ * GitHub 匿名搜索额度是 **10 次/小时**（实测），远超普通用户的搜索节奏会打光。
+ * 这里做进程内额度感知：撞到 403/429 后退避一段冷却期，期间直接跳过 GitHub，
+ * 让 Bing/HN 照常工作。冷却期保守取 15 分钟。
+ */
+const GITHUB_COOLDOWN_MS = 15 * 60 * 1000
+
+/** 慢源超时：比 Bing 主源略短，绝不能拖死整个 turn。 */
+const ENHANCED_TIMEOUT_MS = 8_000
+
+/** 请求 HN Algolia（零 key、无额度困扰）。 */
+export async function searchHackerNews(query, maxResults, signal) {
+  const url = new URL('https://hn.algolia.com/api/v1/search')
+  url.searchParams.set('query', query)
+  url.searchParams.set('hitsPerPage', String(Math.min(maxResults, 10)))
+
+  const response = await fetch(url, {
+    headers: { accept: 'application/json' },
+    signal,
+  })
+  if (!response.ok) throw new Error(`HN HTTP ${response.status}`)
+
+  const data = await response.json()
+  const sources = []
+  for (const hit of data?.hits ?? []) {
+    const title = hit.title ?? hit.story_title
+    const target =
+      hit.url ?? `https://news.ycombinator.com/item?id=${hit.objectID}`
+    if (!title || !/^https?:\/\//.test(target)) continue
+    const points = typeof hit.points === 'number' ? hit.points : null
+    sources.push({
+      url: target,
+      title: String(title),
+      snippet: points === null ? 'Hacker News' : `Hacker News · ${points} points`,
+    })
+  }
+  return { sources, truncated: false }
+}
+
+/** 请求 GitHub 仓库检索（匿名限流 10/h，需配合退避）。 */
+export async function searchGitHub(query, maxResults, signal) {
+  const url = new URL('https://api.github.com/search/repositories')
+  url.searchParams.set('q', query)
+  url.searchParams.set('sort', 'stars')
+  url.searchParams.set('per_page', String(Math.min(maxResults, 10)))
+
+  const response = await fetch(url, {
+    headers: { accept: 'application/vnd.github+json' },
+    signal,
+  })
+
+  // 把限流信号显式抛出，交给上层状态机决定退避。
+  if (response.status === 403 || response.status === 429) {
+    const err = new Error(`GitHub rate limited (HTTP ${response.status})`)
+    err.rateLimited = true
+    throw err
+  }
+  if (!response.ok) throw new Error(`GitHub HTTP ${response.status}`)
+
+  const data = await response.json()
+  const sources = []
+  for (const repo of data?.items ?? []) {
+    if (!repo?.html_url) continue
+    const stars = repo.stargazers_count ?? 0
+    sources.push({
+      url: repo.html_url,
+      title: repo.full_name,
+      snippet: `★${stars}${repo.description ? ` · ${repo.description}` : ''}`,
+    })
+  }
+  return { sources, truncated: false }
+}
+
+/**
+ * 把多个垂直源的结果交错合并（round-robin），保证每个源都有代表。
+ *
+ * 为什么不能直接 `flat()`：
+ * 若某源返回条数多、且排在前面，`flat()` 后它会独占全部预留槽位，
+ * 后面的源永远进不来 —— 表现为「配了 GitHub 却从来没出现过 GitHub 结果」。
+ * （实测踩到：HN 与 GitHub 各 2 条，reserve=2 时 GitHub 恒为 0。）
+ *
+ * @param {Array<Array>} groups - 各源的结果数组
+ * @returns {Array} 交错后的结果项
+ */
+export function interleave(groups) {
+  const lists = (groups ?? []).filter((g) => Array.isArray(g) && g.length > 0)
+  const out = []
+  const maxLen = lists.reduce((acc, g) => Math.max(acc, g.length), 0)
+  for (let i = 0; i < maxLen; i++) {
+    for (const list of lists) {
+      if (i < list.length) out.push(list[i])
+    }
+  }
+  return out
+}
+
+/**
+ * 合并主源与垂直源结果，为主源与垂直源分配槽位。
+ *
+ * 为什么不做「跨引擎共识排序」（omp 的做法）：
+ * 共识排序需要多个通用 web 引擎（Google/Bing/DDG 查同一片网页）才有意义。
+ * 而这里的增强源是**垂直源**（HN 是讨论、GitHub 是仓库），与 Bing 的网页结果
+ * 语义不同，共识度天然为 0，排序反而会把垂直结果全压到末尾。
+ * 故采用「主源优先 + 垂直源预留槽位」这种更朴素但更符合语义的合并。
+ *
+ * **预留槽位是关键**：若不预留，Bing 填满 maxResults 后垂直结果会被整体截断，
+ * 功能静默失效。垂直源不足以填满预留时，用剩余主源回填，不浪费槽位。
+ *
+ * @param {Array} primary - 主源结果（有序）
+ * @param {Array} extras - 垂直源结果（应为交错后的顺序，见 interleave）
+ * @param {number} maxResults - 结果上限
+ * @param {number} reserve - 为垂直源预留的槽位数
+ * @returns {{sources: Array, truncated: boolean}}
+ */
+export function mergeSources(primary, extras, maxResults, reserve = 0) {
+  const extraList = extras ?? []
+  const reserved = Math.min(extraList.length, Math.max(0, reserve))
+  const primaryQuota = Math.max(0, maxResults - reserved)
+
+  const out = []
+  const seen = new Set()
+  const push = (item) => {
+    if (out.length >= maxResults) return false
+    if (!item?.url || seen.has(item.url)) return true // 跳过但不算满
+    seen.add(item.url)
+    out.push(item)
+    return true
+  }
+
+  for (const item of (primary ?? []).slice(0, primaryQuota)) push(item)
+  for (const item of extraList) push(item)
+  // 垂直源少于预留数时，用剩余主源回填。
+  for (const item of primary ?? []) push(item)
+
+  return { sources: out, truncated: out.length >= maxResults }
+}
+
 export class ZeroKeySearchProvider {
   id = ZEROKEY_PROVIDER_ID
 
   constructor(options) {
     this.options = options
+    /** GitHub 退避截止时间戳（epoch ms）。0 = 未处于冷却。 */
+    this.githubCooldownUntil = 0
   }
 
   /**
@@ -191,19 +373,12 @@ export class ZeroKeySearchProvider {
     return true
   }
 
-  async search(request, signal) {
-    const options = this.options()
-    const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS
-    const maxResults = request.maxResults ?? 10
-    const maxSnippetChars = options.maxSnippetChars ?? DEFAULT_MAX_SNIPPET_CHARS
-
+  /** 请求 Bing 主源。失败会抛出——它是唯一不可降级的源。 */
+  async #searchBing(query, limit, snippetChars, signal) {
     const url = new URL('https://cn.bing.com/search')
-    url.searchParams.set('q', request.query)
+    url.searchParams.set('q', query)
     // 多取一些，抵消解析失败的损耗
-    url.searchParams.set('count', String(Math.min(maxResults * 2, 30)))
-
-    const timeout = AbortSignal.timeout(timeoutMs)
-    const combined = signal === undefined ? timeout : AbortSignal.any([signal, timeout])
+    url.searchParams.set('count', String(Math.min(limit * 2, 30)))
 
     let response
     try {
@@ -212,7 +387,7 @@ export class ZeroKeySearchProvider {
         headers: BROWSER_HEADERS,
         // Bing 会 302 到 cn.bing.com；DSH 的 fetch 栈不跨源自动跟随，故直接请求 cn 域。
         redirect: 'follow',
-        signal: combined,
+        signal,
       })
     } catch (error) {
       const cause = error?.cause?.message ?? ''
@@ -232,7 +407,7 @@ export class ZeroKeySearchProvider {
     }
 
     const html = await response.text()
-    const parsed = parseBingHtml(html, maxResults, maxSnippetChars)
+    const parsed = parseBingHtml(html, limit, snippetChars)
 
     if (parsed.sources.length === 0) {
       // 区分"真没结果"与"页面结构变了导致解析失败"——后者是代码问题，不该报成"无结果"。
@@ -243,7 +418,84 @@ export class ZeroKeySearchProvider {
       }
     }
 
-    return parsed
+    return parsed.sources
+  }
+
+  /**
+   * 并行请求增强源。**任何失败都被吞掉**——增强源绝不能影响主结果。
+   *
+   * 但「吞掉」不等于「静默」：失败会写一行 stderr 警告。
+   * 教训：本方法第一版把返回的 `{sources}` 包装对象当数组用，导致垂直源
+   * 全部被静默丢弃（主结果看起来完全正常，功能其实是假的）。
+   * 没有可观测性，这类 bug 不会被任何「主流程正常」的测试发现。
+   *
+   * @returns {Promise<Array>} 成功源的结果项（可能为空数组）
+   */
+  async #searchEnhanced(query, maxResults, signal) {
+    const now = Date.now()
+    const githubAllowed = now >= this.githubCooldownUntil
+
+    // 每个任务都归一到「结果项数组」，并在失败时留下可见痕迹。
+    const run = (label, fn) =>
+      fn()
+        .then((res) => res?.sources ?? [])
+        .catch((error) => {
+          if (error?.rateLimited) {
+            // 撞限流则进入冷却，避免打光额度连累后续查询。
+            this.githubCooldownUntil = Date.now() + GITHUB_COOLDOWN_MS
+            process.stderr.write(`[zerokey] ${label} 限流，进入 ${GITHUB_COOLDOWN_MS / 60000} 分钟冷却\n`)
+          } else {
+            process.stderr.write(`[zerokey] ${label} 增强源失败（已降级为仅主源）：${error?.message ?? error}\n`)
+          }
+          return []
+        })
+
+    const tasks = [run('hackernews', () => searchHackerNews(query, maxResults, signal))]
+    if (githubAllowed) {
+      tasks.push(run('github', () => searchGitHub(query, maxResults, signal)))
+    }
+
+    // 交错而非 flat：否则排前面的源会独占预留槽位，后面的源永不出现。
+    return interleave(await Promise.all(tasks))
+  }
+
+  async search(request, signal) {
+    const options = this.options()
+    const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS
+    const maxResults = request.maxResults ?? 10
+    const maxSnippetChars = options.maxSnippetChars ?? DEFAULT_MAX_SNIPPET_CHARS
+
+    const timeout = AbortSignal.timeout(timeoutMs)
+    const combined = signal === undefined ? timeout : AbortSignal.any([signal, timeout])
+
+    // 决定是否启用增强源：默认开，可被配置关掉；查询必须被判为技术类。
+    const enhancementsEnabled = options.multiSource !== false
+    const useEnhanced = enhancementsEnabled && isTechQuery(request.query)
+
+    // 关键：增强源必须有**预留槽位**，否则 Bing 填满 maxResults 后，
+    // 追加的垂直结果会被整体截断、功能静默失效。
+    const reserve = useEnhanced ? Math.min(3, Math.max(1, Math.floor(maxResults / 4))) : 0
+
+    const [bingSources, extraSources] = await Promise.all([
+      this.#searchBing(request.query, maxResults, maxSnippetChars, combined),
+      useEnhanced
+        ? this.#searchEnhanced(
+            request.query,
+            reserve,
+            AbortSignal.any([combined, AbortSignal.timeout(ENHANCED_TIMEOUT_MS)]),
+          )
+        : Promise.resolve([]),
+    ])
+
+    if (extraSources.length === 0) {
+      // 无增强结果：直接把主源结果按原本语义返回（含 truncated 标记）。
+      return {
+        sources: bingSources,
+        truncated: bingSources.length >= maxResults,
+      }
+    }
+
+    return mergeSources(bingSources, extraSources, maxResults, reserve)
   }
 }
 
