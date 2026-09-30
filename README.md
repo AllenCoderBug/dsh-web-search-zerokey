@@ -47,24 +47,41 @@ dsh plugin --profile web add github:AllenCoderBug/dsh-web-search-zerokey
 
 ### 桌面版手工装（GUI 市场不可用时）
 
-改 `~/.dsh/profiles/desktop/package.json` 两处：
+**三步，缺一不可**（只改声明不装包 = 插件加载失败）。
+
+**1. 改 `~/.dsh/profiles/desktop/package.json`**
 
 ```jsonc
 {
   "dependencies": {
-    "dsh-web-search-zerokey": "^1.0.3"
+    "dsh-web-search-zerokey": "^1.0.4"   // 用最新版本号
   },
   "dsh": {
     "profile": {
       "bundles": [
-        "dsh-web-search-zerokey"   // 加到已有列表
+        "dsh-web-search-zerokey"   // 追加到已有列表末尾
       ]
     }
   }
 }
 ```
 
-> ⚠️ 桌面版的 profile 叫 `desktop`，但**不能用 CLI 装**，会报：
+**2. 装包**（在 profile 目录执行）
+
+```bash
+cd ~/.dsh/profiles/desktop
+pnpm install
+```
+
+> 桌面版自带 pnpm，但它不在你的 `PATH` 里。
+> 若提示 `pnpm: command not found`，用 App 内置的那个：
+> ```bash
+> node "/Applications/DeepSeek Harness.app/Contents/Resources/runtime/pnpm/bin/pnpm.cjs" install
+> ```
+
+**3. `Cmd+Q` 完全退出 DSH 再重开**
+
+> ⚠️ 桌面版的 profile 叫 `desktop`，但**不能用 `dsh plugin` 装**，会报：
 > `error: profile "desktop" is managed exclusively by the Electron application`
 > 这是 `@deepseek-ai/dsh` 的 `lib/bin.js` 里的硬性限制。
 

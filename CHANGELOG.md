@@ -6,6 +6,33 @@
 
 ---
 
+## [1.0.4] — 2026-09-30
+
+### 修复
+
+- **README「桌面版手工装」漏了 `pnpm install` 步骤** ——
+  该节只说「改 `package.json` 两处」，但**只改声明不会下载包**：
+  `node_modules/` 下什么都没有，插件加载必然失败。
+
+  实测验证：建一个只含 dependencies + bundles 声明的 profile 目录，
+  `node_modules` 根本不存在。
+
+  现补为**明确三步**：改声明 → `pnpm install` → `Cmd+Q` 重启。
+
+- 补充 `pnpm` 不在 PATH 时的回退写法。桌面版自带 pnpm，但它不在用户
+  `PATH` 里 —— 这是本机实测踩到的（`pnpm install` 报 `command not found`）。
+  回退命令：
+  ```bash
+  node "/Applications/DeepSeek Harness.app/Contents/Resources/runtime/pnpm/bin/pnpm.cjs" install
+  ```
+
+### 说明
+
+- 本次为**文档修复**，代码未变。因 npm 的 `readme` 字段是发布时快照，
+  必须重新发版才能刷新 npm 页面上的 README。
+
+---
+
 ## [1.0.3] — 2026-09-30
 
 ### 新增
