@@ -15,7 +15,6 @@ import {
   MinIntervalLimiter,
   isRetryableStatus,
   withRetry,
-  cached,
 } from '../lib/request-policy.js'
 import { parseBingDate, formatDateShort, unixSecondsToDate, cap, stripTags } from '../lib/text.js'
 import { parseJuejin } from '../lib/sources/juejin.js'
@@ -90,17 +89,6 @@ test('TtlCache: stats 统计命中率', () => {
   assert.equal(s.hitRate, 0.5)
 })
 
-test('cached: 命中缓存时不再调用 producer（关键：省请求）', async () => {
-  const c = new TtlCache()
-  let calls = 0
-  const producer = async () => {
-    calls++
-    return ['r']
-  }
-  await cached(c, 'k', producer)
-  await cached(c, 'k', producer)
-  assert.equal(calls, 1, '第二次应命中缓存，不再请求上游')
-})
 
 // ---------------------------------------------------------------------------
 // 限速

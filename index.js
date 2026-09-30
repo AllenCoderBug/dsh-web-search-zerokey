@@ -51,6 +51,7 @@ export { interleave, mergeSources, computeReserve, planVerticalQuota, MAX_RESERV
 export {
   TtlCache,
   MinIntervalLimiter,
+  SingleFlight,
   withRetry,
   isRetryableStatus,
   sleep,
@@ -59,7 +60,6 @@ export {
   SOURCES,
   PRIMARY_SOURCE_ID,
   ENHANCEMENT_SOURCE_IDS,
-  getSource,
   SourceQuota,
 } from './lib/sources/registry.js'
 export {
