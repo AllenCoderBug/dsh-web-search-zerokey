@@ -1,15 +1,17 @@
 {
   "name": "dsh-web-search-zerokey",
-  "version": "0.1.0",
-  "description": "零 key web 搜索 provider：Bing HTML 解析，不需要任何 API key 或外部实例，不消耗模型 turn",
+  "version": "0.3.0",
+  "description": "零 key web 搜索 provider：多源（Bing/HN/GitHub/arXiv/npm/掘金/CSDN），不需要任何 API key 或外部实例，不消耗模型 turn",
   "type": "module",
   "main": "index.js",
   "exports": {
     ".": "./index.js",
+    "./lib/*": "./lib/*",
     "./package.json": "./package.json"
   },
   "files": [
     "index.js",
+    "lib/**/*.js",
     "cordis.patch.yml"
   ],
   "keywords": [
