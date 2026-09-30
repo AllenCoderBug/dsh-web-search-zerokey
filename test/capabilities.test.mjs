@@ -184,8 +184,9 @@ test('provider.search: 纯空白查询也视为空', async () => {
 // 重试
 // ---------------------------------------------------------------------------
 
-test('isRetryableStatus: 只重试瞬时/限流类', () => {
-  assert.equal(isRetryableStatus(429), true)
+test('isRetryableStatus: 只重试瞬时故障；429 刻意排除', () => {
+  // 429 交由冷却机制处理，不在本次请求内重试（否则加重限流）
+  assert.equal(isRetryableStatus(429), false)
   assert.equal(isRetryableStatus(500), true)
   assert.equal(isRetryableStatus(503), true)
   assert.equal(isRetryableStatus(404), false)
