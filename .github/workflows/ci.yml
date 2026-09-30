@@ -24,6 +24,9 @@ jobs:
         with:
           node-version: ${{ matrix.node }}
 
+      - name: Lint（零依赖：语法 / 风格 / 结构 / 禁词）
+        run: npm run lint
+
       - name: 运行测试
         run: npm test
 
