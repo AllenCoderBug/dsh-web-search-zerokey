@@ -25,77 +25,48 @@
 
 ## 安装
 
-### 方式一：npm（推荐）
+### DSH 桌面版（推荐 —— 装完即用）
 
-```bash
-npm install -g dsh-web-search-zerokey
-```
+侧栏点 **插件** → 搜索框输入 `zerokey` → **安装**。
 
-或装进 DSH profile：
+装完 `Cmd+Q` 完全退出 DSH 再重开即可，**不需要任何额外配置**。
+
+### 命令行 / Web 版
+
+从 npm 装：
 
 ```bash
 dsh plugin --profile web add dsh-web-search-zerokey
 ```
 
-### 方式二：DSH 桌面版
-
-在 GUI 的**插件市场**里搜索 `zerokey` 安装。
-
-> ⚠️ 桌面版的 profile 叫 `desktop`，但**不能用 CLI 装**，会报：
-> `error: profile "desktop" is managed exclusively by the Electron application`
-> 桌面版请用 GUI 市场，或按下方「手工装」操作。
-
-### 方式三：从 GitHub 装
+从 GitHub 装（npm 尚未发布新版本时）：
 
 ```bash
 dsh plugin --profile web add github:AllenCoderBug/dsh-web-search-zerokey
 ```
 
----
-
-## ★ 装完必须做一步：把 provider 指到它
-
-**不配置的话不会生效。** DSH 的选择规则是「恰好一个可用时自动选中；
-多个可用时必须显式指定」，而官方搜索也在列表里。
-
-编辑 `cordis.patch.yml`（桌面版在 `~/.dsh/profiles/desktop/`）：
-
-```yaml
-- id: web
-  config:
-    searchProvider: zerokey
-```
-
-> **为什么这步不能省**：不指定就可能 fallback 到官方搜索，
-> 而它每次搜索消耗一次完整模型 turn —— 直接扣你的积分。
-> 本仓库有 `test/pin-guard.test.mjs` 锁死这条约束，防止误改。
-
 ### 桌面版手工装（GUI 市场不可用时）
 
-改两处：
-
-**1. `~/.dsh/profiles/desktop/package.json`**
+改 `~/.dsh/profiles/desktop/package.json` 两处：
 
 ```jsonc
 {
   "dependencies": {
-    "dsh-web-search-zerokey": "^1.0.1"
+    "dsh-web-search-zerokey": "^1.0.3"
   },
   "dsh": {
     "profile": {
       "bundles": [
-        "dsh-web-search-zerokey"   // 加到已有列表里
+        "dsh-web-search-zerokey"   // 加到已有列表
       ]
     }
   }
 }
 ```
 
-**2. `~/.dsh/profiles/desktop/cordis.patch.yml`** —— 就是上面那段 pin 配置。
-
-然后**完全退出 DSH（`Cmd+Q`）再重开**。
-
-> ⚠️ **关窗口 ≠ 退出进程**。macOS 上必须 `Cmd+Q`。
+> ⚠️ 桌面版的 profile 叫 `desktop`，但**不能用 CLI 装**，会报：
+> `error: profile "desktop" is managed exclusively by the Electron application`
+> 这是 `@deepseek-ai/dsh` 的 `lib/bin.js` 里的硬性限制。
 
 ---
 
@@ -109,6 +80,32 @@ node ~/.dsh/profiles/desktop/node_modules/dsh-web-search-zerokey/scripts/verify.
 
 它会逐项确认：安装完整性 / pin 护栏 / **进程是否真的加载了新代码** / 功能冒烟。
 全部通过会打印 `插件已生效 ✅`。
+
+> ⚠️ **关窗口 ≠ 退出进程**。macOS 上必须 `Cmd+Q`。
+
+---
+
+## 关于 provider 绑定
+
+**装完即用，因为插件自带绑定** —— 它会把自己的 patch 层写进组合，
+把 `web` 的搜索 provider 指向自己。
+
+层序是「插件的 patch → 你自己的 `cordis.patch.yml`」，**你的配置在后、会覆盖它**，
+所以随时可以改。
+
+**这一步为什么关键**：DSH 官方的搜索 provider 每次搜索消耗
+**一次完整模型 turn**，直接扣积分；而它默认就在列表里。
+不显式指定就可能 fallback 到它。
+
+**想换回官方搜索**，在你自己的 `cordis.patch.yml` 里覆写：
+
+```yaml
+- id: web
+  config:
+    searchProvider: deepseek-official
+```
+
+> 本仓库有 `test/pin-guard.test.mjs` 锁死默认值，防止误改导致意外扣费。
 
 ---
 
