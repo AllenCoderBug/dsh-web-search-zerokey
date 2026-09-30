@@ -41,19 +41,62 @@ const ok = (n, prefix = 'r') => async () =>
 
 const silent = () => ({ log: () => {} })
 
-test('provider: 主源失败 → 整体失败（主源不可降级）', async () => {
+test('provider: 主源失败但垂直源有结果 → 降级返回并标注（回归）', async () => {
+  // 早期实现是「主源失败即整体失败」，实测发现过度保守：
+  // Bing 挂掉时 HN 明明拿到了结果，却把可用结果一起丢掉。
+  // 改为：有货就返回部分结果 + 明确标注不完整。
   const sources = makeSources({
     bing: async () => {
       throw new Error('bing down')
     },
     hackernews: ok(2, 'hn'),
   })
+  const logs = []
+  const p = new ZeroKeySearchProvider(() => ({}), { sources, log: (m) => logs.push(m) })
+
+  const r = await p.search({ query: 'rust async runtime', maxResults: 5 }, undefined)
+
+  assert.ok(r.sources.length > 0, '垂直源有结果时应返回，而不是整体失败')
+  assert.equal(r.degraded, true, '必须标注结果不完整')
+  assert.equal(r.failedSource, 'bing', '应指出哪个源失败')
+  assert.ok(
+    logs.some((l) => /主源.*失败/.test(l) && /降级/.test(l)),
+    '降级必须留痕，否则会掩盖「主源已坏」的信号',
+  )
+})
+
+test('provider: 主源失败且垂直源也无结果 → 整体失败（不伪装成空结果）', async () => {
+  // 关键：不能把「全挂了」伪装成「搜索无结果」——那会让排查方向跑偏。
+  const sources = makeSources({
+    bing: async () => {
+      throw new Error('bing down')
+    },
+    hackernews: async () => ({ sources: [], truncated: false }),
+  })
   const p = new ZeroKeySearchProvider(() => ({}), { sources, ...silent() })
   await assert.rejects(
     p.search({ query: 'rust async runtime', maxResults: 5 }, undefined),
     /bing down/,
-    '主源是唯一不可降级的源，失败必须抛出',
   )
+})
+
+test('provider: 主源失败且无垂直源参与 → 整体失败', async () => {
+  const sources = makeSources({
+    bing: async () => {
+      throw new Error('bing down')
+    },
+  })
+  const p = new ZeroKeySearchProvider(() => ({}), { sources, ...silent() })
+  // 非技术查询不会路由到垂直源
+  await assert.rejects(p.search({ query: '今天天气怎么样', maxResults: 5 }, undefined), /bing down/)
+})
+
+test('provider: 正常路径不带 degraded 标记', async () => {
+  const sources = makeSources({ bing: ok(3, 'b'), hackernews: ok(2, 'hn') })
+  const p = new ZeroKeySearchProvider(() => ({}), { sources, ...silent() })
+  const r = await p.search({ query: 'rust async runtime', maxResults: 5 }, undefined)
+  assert.equal(r.degraded, undefined, '一切正常时不该有 degraded 字段')
+  assert.equal(r.failedSource, undefined)
 })
 
 test('provider: 垂直源失败 → 降级为仅主源，不影响结果', async () => {
