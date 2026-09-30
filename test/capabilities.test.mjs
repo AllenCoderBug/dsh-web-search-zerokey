@@ -781,3 +781,24 @@ test('各源对 maxResults 的边界处理一致（不产生 NaN）', async () =
     }
   }
 })
+
+test('formatDateShort: 非正时间戳一律视为无日期（回归）', () => {
+  // 实测发现的不一致：`0` 走 falsy 分支返回 undefined，
+  // 而 `-1` 会一路算到 `1969-12-31` —— 但 Unix 纪元前的「发布日期」不是有效信号。
+  // 上游 API 在「无日期」时可能给出 0 或负数，不能让它变成假日期。
+  assert.equal(formatDateShort(0), undefined)
+  assert.equal(formatDateShort(-1), undefined)
+  assert.equal(formatDateShort(-1000), undefined)
+  assert.equal(formatDateShort(''), undefined)
+  assert.equal(formatDateShort(null), undefined)
+  assert.equal(formatDateShort(undefined), undefined)
+  // 合法日期仍应正常工作
+  assert.equal(formatDateShort('2026-01-01'), '2026-01-01')
+})
+
+test('unixSecondsToDate: 非正秒数一律返回 undefined', () => {
+  assert.equal(unixSecondsToDate(0), undefined)
+  assert.equal(unixSecondsToDate(-1), undefined)
+  assert.equal(unixSecondsToDate('abc'), undefined)
+  assert.equal(unixSecondsToDate(1789373211), '2026-09-14')
+})
