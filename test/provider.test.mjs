@@ -380,3 +380,44 @@ test('SingleFlight: 直接验证合并语义', async () => {
   assert.equal(sf.stats.coalesced, 2)
   assert.equal(sf.stats.inflight, 0, '结束后应清空 in-flight 表')
 })
+
+test('provider: 正文增强整体抛错时不降低搜索结果（回归）', async () => {
+  // 触发 #maybeEnrich 的 catch 分支。
+  // enrichWithContent 对**单条**失败是吞掉的，故要制造**整体**异常：
+  // 让 cache.set 抛错（它在 try 块内、且不在单条 try 里）。
+  const sources = makeSources({ bing: ok(4, 'b') })
+  const logs = []
+  const p = new ZeroKeySearchProvider(
+    () => ({ includeContent: true, contentMaxFetch: 2 }),
+    {
+      sources,
+      fetchText: async () => '<p>' + '正文'.repeat(80) + '</p>',
+      log: (m) => logs.push(m),
+    },
+  )
+
+  // cache.set 在增强成功后被调用；让它抛错即可进入 catch
+  const realSet = p.cache.set.bind(p.cache)
+  p.cache.set = (k, v, ttl) => {
+    // 只让「增强结果」的写入失败，不影响搜索结果的缓存
+    if (typeof k === 'string' && k.includes('enrich')) throw new Error('simulated cache failure')
+    return realSet(k, v, ttl)
+  }
+
+  const r = await p.search({ query: 'x', maxResults: 4 }, undefined)
+  assert.ok(Array.isArray(r.sources) && r.sources.length > 0, '增强失败不该影响搜索结果')
+  assert.ok(
+    logs.some((l) => /整体失败/.test(l)),
+    `整体失败必须留痕，实际日志: ${JSON.stringify(logs)}`,
+  )
+  assert.ok(p.contentStats.failures >= 1, '应记录失败计数')
+})
+
+test('provider: stats 暴露缓存统计', async () => {
+  const sources = makeSources({ bing: ok(2, 'b') })
+  const p = new ZeroKeySearchProvider(() => ({}), { sources, ...silent() })
+  await p.search({ query: 'x', maxResults: 2 }, undefined)
+  const s = p.stats
+  assert.ok(s.cache, 'stats 应含 cache')
+  assert.equal(typeof s.cache.hits, 'number')
+})

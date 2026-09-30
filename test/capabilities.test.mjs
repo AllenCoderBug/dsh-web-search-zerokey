@@ -572,3 +572,70 @@ test('SourceQuota: 非法倍率回退为 1（防异常输入放大冷却）', ()
   const b = q.cooldownRemaining('x')
   assert.ok(a <= 1100 && b <= 1100, '非法倍率应按 1 处理')
 })
+
+// ---------------------------------------------------------------------------
+// 覆盖剩余的错误分支
+// ---------------------------------------------------------------------------
+
+test('AdaptationStore: 状态写入失败时只记日志，不影响运行', () => {
+  const logs = []
+  // 用一个不可能写入的路径（其父是一个文件而非目录）
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'zz-probe-badstate-'))
+  const blocker = path.join(dir, 'blocker')
+  fs.writeFileSync(blocker, 'not a directory')
+  const statePath = path.join(blocker, 'sub', 'adapt.json')
+
+  try {
+    const a = new AdaptationStore({ statePath })
+    a.record('x', { ok: true })
+    a.save((m) => logs.push(m))
+    assert.ok(logs.some((l) => /写入失败/.test(l)), '写失败必须留痕')
+    // 关键：不该抛错，统计仍在内存中可用
+    assert.ok(a.quotaFactor('x') >= 0.5)
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('AdaptationStore: summarizeAll 覆盖多个源', () => {
+  const a = new AdaptationStore({ persist: false })
+  a.record('bing', { ok: true, latencyMs: 30 })
+  a.record('hn', { ok: false, rateLimited: true })
+  const all = a.summarizeAll()
+  assert.deepEqual(Object.keys(all).sort(), ['bing', 'hn'])
+  assert.equal(all.bing.successRate, 1)
+  assert.equal(all.hn.successRate, 0)
+})
+
+test('AdaptationStore: summarizeAll 初始为空对象', () => {
+  assert.deepEqual(new AdaptationStore({ persist: false }).summarizeAll(), {})
+})
+
+test('AdaptationStore: reset 清空统计', () => {
+  const a = new AdaptationStore({ persist: false })
+  a.record('x', { ok: true })
+  assert.ok(Object.keys(a.summarizeAll()).length > 0)
+  a.reset()
+  assert.deepEqual(a.summarizeAll(), {})
+})
+
+test('AdaptationStore: 禁用时 record 为 no-op', () => {
+  const a = new AdaptationStore({ enabled: false, persist: false })
+  a.record('x', { ok: false, rateLimited: true })
+  assert.deepEqual(a.summarizeAll(), {})
+})
+
+test('AdaptationStore: save 在 dirty=false 时不写盘（幂等）', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'zz-probe-nd-'))
+  const statePath = path.join(dir, 'a.json')
+  try {
+    const a = new AdaptationStore({ statePath })
+    a.save() // 无 record，dirty=false
+    assert.equal(fs.existsSync(statePath), false, '无变化时不该写盘')
+    a.record('x', { ok: true })
+    a.save()
+    assert.equal(fs.existsSync(statePath), true)
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
+})
