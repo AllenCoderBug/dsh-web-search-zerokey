@@ -18,6 +18,7 @@ import { parseJuejin } from '../lib/sources/juejin.js'
 import { parseCsdn } from '../lib/sources/csdn.js'
 import { parseArxivXml } from '../lib/sources/arxiv.js'
 import { SourceQuota } from '../lib/sources/registry.js'
+import { ZeroKeySearchProvider } from '../lib/provider.js'
 import { enrichWithContent, extractReadableText, looksLikeShellPage } from '../lib/enrich.js'
 
 // ---------------------------------------------------------------------------
@@ -149,6 +150,30 @@ test('MinIntervalLimiter: 回归 — 按 key 隔离间隔，慢源不被快源�
 test('MinIntervalLimiter: 构造传单一数字时作为默认值', () => {
   const lim = new MinIntervalLimiter(250)
   assert.equal(lim.intervalFor('anything'), 250)
+})
+
+// ---------------------------------------------------------------------------
+// 边界输入（实测踩到的两个契约问题）
+// ---------------------------------------------------------------------------
+
+test('provider.search: 空查询返回空结果且不发请求（回归）', async () => {
+  // 实测踩到：空查询会真的请求 Bing，拿到无结果页后抛
+  // 「页面结构可能已变更」的误导性错误，让排查方向跑偏。
+  const p = new ZeroKeySearchProvider(() => ({}), { log: () => {} })
+  const r = await p.search({ query: '', maxResults: 5 }, undefined)
+  assert.deepEqual(r, { sources: [], truncated: false })
+})
+
+test('provider.search: maxResults=0 返回空结果（回归：曾返回 1 条）', async () => {
+  const p = new ZeroKeySearchProvider(() => ({}), { log: () => {} })
+  const r = await p.search({ query: 'test', maxResults: 0 }, undefined)
+  assert.equal(r.sources.length, 0, 'maxResults=0 不该返回任何结果')
+})
+
+test('provider.search: 纯空白查询也视为空', async () => {
+  const p = new ZeroKeySearchProvider(() => ({}), { log: () => {} })
+  const r = await p.search({ query: '   \t  ' }, undefined)
+  assert.deepEqual(r, { sources: [], truncated: false })
 })
 
 // ---------------------------------------------------------------------------
