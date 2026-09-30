@@ -67,6 +67,7 @@ export {
   extractReadableText,
   looksLikeShellPage,
 } from './lib/enrich.js'
+export { AdaptationStore, defaultStatePath } from './lib/adapt.js'
 
 /**
  * 把宿主的 `ctx.web.fetch()` 适配成本插件需要的「取文本」函数。

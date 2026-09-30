@@ -2,6 +2,9 @@
  * 新增能力测试：路由分类、请求策略、解析器。
  * 这些针对 v0.3.0 的新模块，与 routing.test.mjs（旧行为回归）互补。
  */
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
@@ -19,6 +22,7 @@ import { parseCsdn } from '../lib/sources/csdn.js'
 import { parseArxivXml } from '../lib/sources/arxiv.js'
 import { SourceQuota } from '../lib/sources/registry.js'
 import { ZeroKeySearchProvider } from '../lib/provider.js'
+import { AdaptationStore } from '../lib/adapt.js'
 import { enrichWithContent, extractReadableText, looksLikeShellPage } from '../lib/enrich.js'
 
 // ---------------------------------------------------------------------------
@@ -429,4 +433,106 @@ test('enrichWithContent: 无 fetchText 时原样返回（P4 关闭）', async ()
   const sources = [{ url: 'https://a', title: 'A' }]
   const out = await enrichWithContent(sources, {})
   assert.deepEqual(out, sources)
+})
+
+// ---------------------------------------------------------------------------
+// 自适应（自进化）
+// ---------------------------------------------------------------------------
+
+test('AdaptationStore: 样本不足时不调整（防小样本噪声）', () => {
+  const a = new AdaptationStore({ persist: false })
+  a.record('x', { ok: false })
+  a.record('x', { ok: false })
+  // 只有 2 个样本，低于 MIN_SAMPLES=3
+  assert.equal(a.quotaFactor('x'), 1, '样本不足时不应调整配额')
+})
+
+test('AdaptationStore: 成功率低 → 配额下降，但有下限（不饿死）', () => {
+  const a = new AdaptationStore({ persist: false })
+  for (let i = 0; i < 10; i++) a.record('x', { ok: false })
+  const q = a.quotaFactor('x')
+  assert.ok(q < 1, `失败多应降低配额，实际 ${q}`)
+  assert.ok(q >= 0.5, `配额不应低于下限 0.5，实际 ${q}`)
+})
+
+test('AdaptationStore: 频繁限流 → 冷却拉长，但有上限', () => {
+  const a = new AdaptationStore({ persist: false })
+  for (let i = 0; i < 10; i++) a.record('x', { ok: false, rateLimited: true })
+  const c = a.cooldownFactor('x')
+  assert.ok(c > 1, `限流多应拉长冷却，实际 ${c}`)
+  assert.ok(c <= 4, `冷却倍率不应超过上限 4，实际 ${c}`)
+})
+
+test('AdaptationStore: 全成功不惩罚（配额保持 1）', () => {
+  const a = new AdaptationStore({ persist: false })
+  for (let i = 0; i < 10; i++) a.record('x', { ok: true, latencyMs: 50 })
+  assert.equal(a.quotaFactor('x'), 1)
+  assert.equal(a.cooldownFactor('x'), 1)
+})
+
+test('AdaptationStore: 持久化 —— 重新载入后统计仍在（这才叫进化）', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'zz-probe-adapt-'))
+  const statePath = path.join(dir, 'adapt.json')
+  try {
+    const a = new AdaptationStore({ statePath })
+    for (let i = 0; i < 10; i++) a.record('slow', { ok: false, rateLimited: true })
+    a.save()
+    const factorBefore = a.cooldownFactor('slow')
+
+    // 新实例模拟「重启」
+    const b = new AdaptationStore({ statePath })
+    b.load()
+    assert.ok(
+      Math.abs(b.cooldownFactor('slow') - factorBefore) < 1e-9,
+      '重启后应保留学到的参数',
+    )
+    assert.equal(b.summary('slow').samples > 0, true, '样本数也应保留')
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('AdaptationStore: 文件损坏 / 不存在时不崩（从零开始）', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'zz-probe-adapt-'))
+  const statePath = path.join(dir, 'adapt.json')
+  try {
+    // 不存在
+    const a = new AdaptationStore({ statePath })
+    a.load()
+    assert.equal(a.quotaFactor('x'), 1)
+    // 损坏
+    fs.writeFileSync(statePath, '{ not json')
+    const b = new AdaptationStore({ statePath })
+    b.load()
+    assert.equal(b.quotaFactor('x'), 1)
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('AdaptationStore: 落盘的值被夹在安全区间（防篡改导致极端行为）', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'zz-probe-adapt-'))
+  const statePath = path.join(dir, 'adapt.json')
+  try {
+    // 手工写入越界值，模拟文件被改坏或恶意修改
+    fs.writeFileSync(
+      statePath,
+      JSON.stringify({
+        version: 1,
+        sources: { evil: { success: 0, failure: 99, samples: 99, quotaFactor: -100, cooldownFactor: 9999 } },
+      }),
+    )
+    const a = new AdaptationStore({ statePath })
+    a.load()
+    assert.ok(a.quotaFactor('evil') >= 0.5, '配额下界应被夹住')
+    assert.ok(a.cooldownFactor('evil') <= 4, '冷却上界应被夹住')
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('AdaptationStore: 禁用时不影响主流程', () => {
+  const a = new AdaptationStore({ enabled: false, persist: false })
+  for (let i = 0; i < 20; i++) a.record('x', { ok: false })
+  assert.equal(a.quotaFactor('x'), 1, '禁用时恒返回默认值')
 })
