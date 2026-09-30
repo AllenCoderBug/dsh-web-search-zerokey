@@ -136,6 +136,19 @@ stat -f "%Sm" ~/.dsh/profiles/desktop/node_modules/dsh-web-search-zerokey/lib/pr
 
 ---
 
+## 生效自检（重启后先跑这个）
+
+```bash
+cd ~/.dsh/profiles/desktop
+node ~/Documents/myprojects/mind/handoff/dsh-web-search-zerokey/scripts/verify.mjs
+```
+
+一键确认 13 项：安装副本完整性 / pin 护栏 / **进程是否已加载新代码** /
+功能冒烟 / 自适应状态。脚本会把「待重启」与「真失败」分开报告 ——
+前者是预期中间态，不是故障。
+
+> 注意：**关窗口 ≠ 退出进程**。需 Cmd+Q 真正退出后重开。
+
 ## 测试
 
 ```bash
