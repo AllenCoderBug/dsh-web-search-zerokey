@@ -104,6 +104,47 @@ try {
   check('查找 DSH host 进程', false, '未找到运行中的 host 进程')
 }
 
+// ── 3.5 加载契约（Cordis 插件要求）────────────────────────────────────
+// 为什么要单独查：重启失败最常见的原因不是逻辑错误，而是**导出形状不符**
+// （Cordis 要求 name / inject / apply 三件套）。这类问题在 import 层面看不出，
+// 只有按契约逐项核对才会暴露。
+console.log('\n【加载契约（Cordis）】')
+try {
+  const pkgPath = path.join(os.homedir(), '.dsh/profiles/desktop/package.json')
+  const profilePkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'))
+  const bundles = profilePkg?.dsh?.profile?.bundles ?? []
+  check('插件已登记进 profile bundles', bundles.includes('dsh-web-search-zerokey'))
+
+  const mod = await import(path.join(INSTALL_DIR, 'index.js'))
+  check('name 是字符串', typeof mod.name === 'string', String(mod.name))
+  check('inject 声明了 web 依赖', Array.isArray(mod.inject) && mod.inject.includes('web'))
+  check('apply 是函数', typeof mod.apply === 'function')
+
+  // 实际跑一次 apply，确认注册契约成立
+  const reg = []
+  const eff = []
+  mod.apply(
+    {
+      effect: (fn) => {
+        eff.push(fn)
+        return () => {}
+      },
+      web: {
+        registerSearchProvider: (p) => {
+          reg.push(p)
+          return () => {}
+        },
+      },
+    },
+    {},
+  )
+  check('apply 注册了 search provider', reg.length === 1)
+  check('provider.id 为 zerokey', reg[0]?.id === 'zerokey', String(reg[0]?.id))
+  check('apply 注册了 CA effect', eff.length === 1)
+} catch (e) {
+  check('加载契约检查', false, e.message)
+}
+
 // ── 4. 功能冒烟 ────────────────────────────────────────────────────────
 console.log('\n【功能冒烟】')
 try {
