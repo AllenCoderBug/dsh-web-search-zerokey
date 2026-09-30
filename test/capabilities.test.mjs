@@ -482,11 +482,15 @@ test('AdaptationStore: 持久化 —— 重新载入后统计仍在（这才叫�
     // 新实例模拟「重启」
     const b = new AdaptationStore({ statePath })
     b.load()
+    // 容差说明：落盘时数值被四舍五入到 4 位小数（去掉浮点长尾，便于人读与 diff）。
+    // 倍率的有效区间只有 [0.5,4]，故 1e-3 的容差远小于任何有意义的差别 ——
+    // 这不是放宽断言，而是断言「实质等价」这个真实要求。
     assert.ok(
-      Math.abs(b.cooldownFactor('slow') - factorBefore) < 1e-9,
-      '重启后应保留学到的参数',
+      Math.abs(b.cooldownFactor('slow') - factorBefore) < 1e-3,
+      `重启后应保留学到的参数（前 ${factorBefore}，后 ${b.cooldownFactor('slow')}）`,
     )
     assert.equal(b.summary('slow').samples > 0, true, '样本数也应保留')
+    assert.ok(b.summary('slow').rateLimitRate > 0, '限流率也应保留')
   } finally {
     fs.rmSync(dir, { recursive: true, force: true })
   }
