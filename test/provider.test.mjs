@@ -14,6 +14,7 @@ import assert from 'node:assert/strict'
 import { ZeroKeySearchProvider } from '../lib/provider.js'
 import { AdaptationStore } from '../lib/adapt.js'
 import { SingleFlight } from '../lib/request-policy.js'
+import { planVerticalQuota } from '../lib/merge.js'
 
 /** 构造一个假源表。 */
 function makeSources(spec) {
@@ -502,4 +503,79 @@ test('provider: 来源标注在缓存命中也保留（不会丢字段）', asyn
   const r2 = await p.search({ query: 'x', maxResults: 2 }, undefined) // 命中缓存
   assert.ok(r1.sources.every((s) => s.source === 'Bing'))
   assert.ok(r2.sources.every((s) => s.source === 'Bing'), '缓存结果也应带标注')
+})
+
+test('provider: 自适应配额只下浮、不上浮（防突破预留约束）', async () => {
+  // 旧实现有 `Math.max(base,1)+1` 的上浮分支，factor=1.5 时会让 base=2 的源
+  // 请求 3 条 —— 突破 planVerticalQuota 保证的「源数×每源 ≤ 预留」，
+  // 多出的结果没有槽位可放，请求被白打（只增加暴露面）。
+  const recorded = []
+  const sources = new Map([
+    [
+      'bing',
+      { id: 'bing', label: 'Bing', kind: 'scrape', search: ok(10, 'b') },
+    ],
+    [
+      'hackernews',
+      {
+        id: 'hackernews',
+        label: 'HN',
+        kind: 'api',
+        search: async (q, o) => {
+          recorded.push(o.maxResults)
+          return { sources: [], truncated: false }
+        },
+      },
+    ],
+  ])
+
+  const adapt = new AdaptationStore({ persist: false })
+  // 人为把该源的 quotaFactor 抬高（模拟「表现好」被上浮的情形）
+  adapt.record('hackernews', { ok: true })
+  adapt.record('hackernews', { ok: true })
+  adapt.record('hackernews', { ok: true })
+  // 直接篡改到 >1，验证即便因子 >1 也不会超出 base
+  adapt.stats.get('hackernews').quotaFactor = 1.5
+
+  const p = new ZeroKeySearchProvider(() => ({}), { sources, adapt, ...silent() })
+  await p.search({ query: 'rust async runtime', maxResults: 10 }, undefined)
+
+  assert.ok(recorded.length > 0, '该源应被调用')
+  const maxRequested = Math.max(...recorded)
+
+  // 注意 base 不是 2 —— 本测试只注入 1 个垂直源，
+  // 故 planVerticalQuota(10, 1) → perSource=3（base=3）。
+  // 断言应基于这个真实 base，而不是想象中的 2。
+  const { perSource } = planVerticalQuota(10, 1)
+  assert.ok(
+    maxRequested <= perSource,
+    `factor=1.5 时也不该超过 base=${perSource}，实际请求 ${maxRequested} 条`,
+  )
+})
+
+test('provider: 配额下浮仍至少保留 1 条（不把源关掉）', async () => {
+  const recorded = []
+  const sources = new Map([
+    ['bing', { id: 'bing', label: 'Bing', kind: 'scrape', search: ok(10, 'b') }],
+    [
+      'hackernews',
+      {
+        id: 'hackernews',
+        label: 'HN',
+        kind: 'api',
+        search: async (q, o) => {
+          recorded.push(o.maxResults)
+          return { sources: [], truncated: false }
+        },
+      },
+    ],
+  ])
+  const adapt = new AdaptationStore({ persist: false })
+  for (let i = 0; i < 12; i++) adapt.record('hackernews', { ok: false, rateLimited: true })
+
+  const p = new ZeroKeySearchProvider(() => ({}), { sources, adapt, ...silent() })
+  await p.search({ query: 'rust async runtime', maxResults: 10 }, undefined)
+
+  assert.ok(recorded.length > 0, '即便表现差，源仍应被调用（不是直接关掉）')
+  assert.ok(recorded.every((n) => n >= 1), '每源至少请求 1 条')
 })
