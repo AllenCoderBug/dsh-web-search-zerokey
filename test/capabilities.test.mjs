@@ -9,7 +9,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
 import { classifyQuery, routeSources } from '../lib/route.js'
-import { planVerticalQuota, computeReserve, MAX_RESERVE } from '../lib/merge.js'
+import { planVerticalQuota, computeReserve, MAX_RESERVE, mergeSources } from '../lib/merge.js'
 import {
   TtlCache,
   MinIntervalLimiter,
@@ -709,4 +709,38 @@ test('computeReserve: 给出源数时走新算法，不给时保持旧行为', (
   // 旧行为（不传源数）—— 保持向后兼容
   assert.equal(computeReserve(10, true), 2)
   assert.equal(computeReserve(10, false), 0)
+})
+
+// ---------------------------------------------------------------------------
+// truncated 语义（此前有误报）
+// ---------------------------------------------------------------------------
+
+test('mergeSources: truncated 表示「有内容被丢弃」，而非「刚好填满」', () => {
+  const mk = (n, p = 'x') =>
+    Array.from({ length: n }, (_, i) => ({ url: `https://${p}/${i}`, title: 't' }))
+
+  // 恰好填满但一条没丢 → 不该报 truncated
+  // （旧实现用 `out.length >= maxResults`，这种情况会误报，
+  //  让消费者以为还有更多结果未展示。）
+  assert.equal(mergeSources(mk(10), [], 10, 0).truncated, false, '刚好填满 ≠ 被截断')
+  assert.equal(mergeSources(mk(5), [], 10, 0).truncated, false, '不足上限')
+
+  // 确实被上限挤掉 → 报 truncated
+  assert.equal(mergeSources(mk(20), [], 10, 0).truncated, true, '超出上限应报截断')
+  assert.equal(
+    mergeSources(mk(10), mk(5, 'e'), 10, 2).truncated,
+    true,
+    '主源+垂直源合计超出上限应报截断',
+  )
+})
+
+test('mergeSources: 全是重复 URL 时不报 truncated（去重不是截断）', () => {
+  const dup = [
+    { url: 'https://same', title: 'a' },
+    { url: 'https://same', title: 'b' },
+    { url: 'https://same', title: 'c' },
+  ]
+  const r = mergeSources(dup, [], 10, 0)
+  assert.equal(r.sources.length, 1)
+  assert.equal(r.truncated, false, '去重丢弃的不是「因超限」，不该报截断')
 })
