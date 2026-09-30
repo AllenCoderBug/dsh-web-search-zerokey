@@ -421,3 +421,42 @@ test('provider: stats 暴露缓存统计', async () => {
   assert.ok(s.cache, 'stats 应含 cache')
   assert.equal(typeof s.cache.hits, 'number')
 })
+
+test('provider: 结果项带结构化来源标注（证据层）', async () => {
+  // 此前来源只混在 snippet 文字里，且格式不一致（arXiv/CSDN 有、GitHub/npm 没有），
+  // 模型只能靠读文字猜来源。加结构化字段后才能机器化判断可信度。
+  const sources = new Map([
+    [
+      'bing',
+      { id: 'bing', label: 'Bing', kind: 'scrape', search: ok(2, 'b') },
+    ],
+    [
+      'hackernews',
+      { id: 'hackernews', label: 'Hacker News', kind: 'api', search: ok(1, 'hn') },
+    ],
+  ])
+  const p = new ZeroKeySearchProvider(() => ({}), { sources, ...silent() })
+  const r = await p.search({ query: 'rust async runtime', maxResults: 6 }, undefined)
+
+  assert.ok(r.sources.every((s) => s.source), '每条结果都应有 source')
+  assert.ok(r.sources.every((s) => s.sourceKind), '每条结果都应有 sourceKind')
+
+  const bing = r.sources.find((s) => s.source === 'Bing')
+  assert.equal(bing.sourceKind, 'scrape', 'Bing 是抓页来源')
+
+  const hn = r.sources.find((s) => s.source === 'Hacker News')
+  assert.ok(hn, 'HN 结果应带自己的标签')
+  assert.equal(hn.sourceKind, 'api', 'HN 是 API 来源')
+})
+
+test('provider: 来源标注在缓存命中也保留（不会丢字段）', async () => {
+  const sources = makeSources({ bing: ok(2, 'b') })
+  sources.get('bing').label = 'Bing'
+  sources.get('bing').kind = 'scrape'
+  const p = new ZeroKeySearchProvider(() => ({}), { sources, ...silent() })
+
+  const r1 = await p.search({ query: 'x', maxResults: 2 }, undefined)
+  const r2 = await p.search({ query: 'x', maxResults: 2 }, undefined) // 命中缓存
+  assert.ok(r1.sources.every((s) => s.source === 'Bing'))
+  assert.ok(r2.sources.every((s) => s.source === 'Bing'), '缓存结果也应带标注')
+})
