@@ -130,7 +130,7 @@ dsh plugin --profile web add dsh-web-search-zerokey
 再从 GitHub 装（未发 npm 时）：
 
 ```bash
-dsh plugin --profile web add github:husongzhen/dsh-web-search-zerokey
+dsh plugin --profile web add github:AllenCoderBug/dsh-web-search-zerokey
 ```
 
 装完**同样需要** pin（见下）。
@@ -298,7 +298,7 @@ Bing 的 `robots.txt` 的 `Disallow` 列表内。
 ## 开发
 
 ```bash
-git clone https://github.com/husongzhen/dsh-web-search-zerokey.git
+git clone https://github.com/AllenCoderBug/dsh-web-search-zerokey.git
 cd dsh-web-search-zerokey
 npm test                  # 162 个用例
 npm run test:coverage     # 含覆盖率报告（当前 98.55%）

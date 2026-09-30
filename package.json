@@ -39,11 +39,11 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/husongzhen/dsh-web-search-zerokey.git"
+    "url": "git+https://github.com/AllenCoderBug/dsh-web-search-zerokey.git"
   },
-  "homepage": "https://github.com/husongzhen/dsh-web-search-zerokey#readme",
+  "homepage": "https://github.com/AllenCoderBug/dsh-web-search-zerokey#readme",
   "bugs": {
-    "url": "https://github.com/husongzhen/dsh-web-search-zerokey/issues"
+    "url": "https://github.com/AllenCoderBug/dsh-web-search-zerokey/issues"
   },
   "engines": {
     "node": "^22.19.0 || >=24.0.0"

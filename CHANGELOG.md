@@ -59,4 +59,4 @@
 内部版本。单文件起步（185 行），抓取 Bing 页面解析，解决本机搜索整体不可用的
 CA 信任链问题。
 
-[1.0.0]: https://github.com/husongzhen/dsh-web-search-zerokey/releases/tag/v1.0.0
+[1.0.0]: https://github.com/AllenCoderBug/dsh-web-search-zerokey/releases/tag/v1.0.0

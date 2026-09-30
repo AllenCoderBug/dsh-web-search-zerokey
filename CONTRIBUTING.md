@@ -8,7 +8,7 @@
 ## 快速开始
 
 ```bash
-git clone https://github.com/husongzhen/dsh-web-search-zerokey.git
+git clone https://github.com/AllenCoderBug/dsh-web-search-zerokey.git
 cd dsh-web-search-zerokey
 npm test
 ```
