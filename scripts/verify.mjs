@@ -6,9 +6,11 @@
  *   host 进程加载的是启动时刻的插件，改了源目录/安装副本都不生效，
  *   必须重启。而重启后「有没有真的生效」需要一个客观判据，不能靠感觉。
  *
- * 用法：
- *   cd ~/.dsh/profiles/desktop
- *   node ~/Documents/myprojects/mind/handoff/dsh-web-search-zerokey/scripts/verify.mjs
+ * 用法（安装后）：
+ *   node "$DSH_HOME/profiles/desktop/node_modules/dsh-web-search-zerokey/scripts/verify.mjs"
+ *
+ * 用法（开发时，在仓库内）：
+ *   node scripts/verify.mjs
  *
  * 退出码：0 = 全部通过；1 = 有项目失败。
  */

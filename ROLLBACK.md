@@ -17,7 +17,7 @@
 
 ```bash
 cd ~/.dsh/profiles/desktop
-node ~/Documents/myprojects/mind/handoff/dsh-web-search-zerokey/scripts/verify.mjs
+node node_modules/dsh-web-search-zerokey/scripts/verify.mjs
 ```
 
 ---
@@ -29,7 +29,8 @@ node ~/Documents/myprojects/mind/handoff/dsh-web-search-zerokey/scripts/verify.m
 **修复**（重新同步）：
 
 ```bash
-SRC=~/Documents/myprojects/mind/handoff/dsh-web-search-zerokey
+# SRC = 你的仓库克隆位置
+SRC=~/dsh-web-search-zerokey
 DST=~/.dsh/profiles/desktop/node_modules/dsh-web-search-zerokey
 cp "$SRC/index.js" "$SRC/package.json" "$DST/"
 rm -rf "$DST/lib" && cp -R "$SRC/lib" "$DST/lib"
@@ -49,9 +50,9 @@ rm -rf "$DST/lib" && cp -R "$SRC/lib" "$DST/lib"
 ### 3.1 快速回滚整个插件目录
 
 ```bash
-cd ~/Documents/myprojects/mind
-git log --oneline -- handoff/dsh-web-search-zerokey/    # 找到目标提交
-git checkout <目标提交> -- handoff/dsh-web-search-zerokey/
+cd ~/dsh-web-search-zerokey      # 你的仓库克隆位置
+git log --oneline                # 找到目标提交
+git checkout <目标提交> -- .
 # 再按 §2 同步到安装副本，然后重启
 ```
 
@@ -124,7 +125,7 @@ rm -f ~/.dsh/cache/dsh-web-search-zerokey/adapt.json
 
 ```bash
 cd ~/.dsh/profiles/desktop
-node ~/Documents/myprojects/mind/handoff/dsh-web-search-zerokey/scripts/verify.mjs
+node node_modules/dsh-web-search-zerokey/scripts/verify.mjs
 ```
 
 全部通过（`插件已生效 ✅`）即回滚成功。

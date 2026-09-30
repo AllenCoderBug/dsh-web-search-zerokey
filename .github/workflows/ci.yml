@@ -1,0 +1,75 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    name: Test (Node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 与 package.json 的 engines 保持一致
+        # （^22.19.0 || >=24.0.0 —— 22.19 是 AbortSignal.any 的最低可用版本）
+        node: ['22.19', '24']
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+
+      - name: 运行测试
+        run: npm test
+
+      - name: 覆盖率
+        if: matrix.node == '24'
+        run: npm run test:coverage
+
+  # 单独一项：确认没有引入需要 API key 的依赖
+  # （这是本项目的核心承诺，值得在 CI 里守住）
+  zero-key-guard:
+    name: 零 key 承诺检查
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: 确认工程依赖为空
+        run: |
+          node -e "
+          const pkg = require('./package.json');
+          const deps = Object.keys(pkg.dependencies || {});
+          if (deps.length > 0) {
+            console.error('❌ 出现了运行时依赖：' + deps.join(', '));
+            console.error('   本项目承诺零 key 且零外部服务，不应有 dependencies。');
+            process.exit(1);
+          }
+          console.log('✅ dependencies 为空');
+          "
+
+      - name: 确认代码里没有裸 fetch
+        run: |
+          # 抓取用户可控 URL 必须走 ctx.web.fetch()，裸 fetch 会绕过 SSRF 防护。
+          # lib/sources/* 是直连已知的公开 API，属于例外（见 CONTRIBUTING）。
+          if grep -rn "await fetch(" lib/enrich.js 2>/dev/null; then
+            echo "❌ lib/enrich.js 出现了裸 fetch —— 它抓的是搜索结果里的任意 URL"
+            exit 1
+          fi
+          echo "✅ 抓取任意 URL 的路径未发现裸 fetch"
+
+      - name: 确认 pin 护栏测试存在
+        run: |
+          if [ ! -f test/pin-guard.test.mjs ]; then
+            echo "❌ test/pin-guard.test.mjs 不见了"
+            echo "   它防止 fallback 到会烧积分的官方搜索，不能删。"
+            exit 1
+          fi
+          echo "✅ pin 护栏测试在位"

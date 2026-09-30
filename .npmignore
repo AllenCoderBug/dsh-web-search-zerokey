@@ -1,0 +1,28 @@
+# 发布包只保留运行必需 + 用户文档。
+# 白名单在 package.json 的 files 字段里已声明，此文件用于排除漏网之鱼。
+
+# 测试（用户不需要，且体积不小）
+test/
+
+# 开发期文档（面向维护者，不是用户）
+UPGRADE-PLAN.md
+ROLLBACK.md
+CONTRIBUTING.md
+
+# 仓库元数据
+.github/
+.gitignore
+.npmignore
+.editorconfig
+
+# 编辑器 / 系统
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# 探针与临时产物
+zz-probe-*
+*.tgz
+*.log
+coverage/

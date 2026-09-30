@@ -1,0 +1,62 @@
+# Changelog
+
+本文件记录所有值得注意的变更。
+格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
+版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
+
+---
+
+## [1.0.0] — 2026-09-30
+
+首个公开发布版。**核心承诺：零 key —— 不填任何 API key、不启任何本地服务、不消耗模型积分。**
+
+### 新增
+
+- **多源聚合**：7 个数据源（Bing / Hacker News / GitHub / arXiv / npm / 掘金 / CSDN），
+  结果按轮转（interleave）合并，避免单一源独占槽位
+- **中英文自动路由**：中文技术查询走掘金/CSDN，生活类查询只走 Bing（不混入英文源）
+- **自适应调度（自进化）**：按源统计成功率与限流率，动态调整配额与冷却；
+  状态持久化，跨重启保留
+- **两层请求去重**：SingleFlight（并发合并）+ TTL 缓存
+- **优雅降级**：主源失败但垂直源有结果时返回部分结果并标注 `degraded`
+- **证据层标注**：每条结果带 `source` / `sourceKind`
+- **TLS CA 进程内注入**：解决 DSH 桌面版从 GUI 启动时无法注入 `NODE_EXTRA_CA_CERTS` 的问题
+- **生效自检脚本** `scripts/verify.mjs`：20+ 项检查，区分「待重启」与「真失败」
+
+### 设计约束（不可协商）
+
+- `searchProvider` 必须 pin 为 `zerokey` —— 防止 fallback 到官方搜索
+  （其「one search costs a full model turn in latency and tokens」）
+- 抓取结果的任意 URL 必须走 `ctx.web.fetch()`，不得裸 `fetch()`（SSRF）
+- arXiv 严格遵守官方 3s 限速（ToU 硬性要求）
+
+### 修复（开发期发现并已解决）
+
+- `isRetryableStatus(429)` 返回 true → 限流源被重试 3 次，加剧节流
+- `MinIntervalLimiter` 把间隔存在实例字段 → arXiv 的 3000ms 被其他源覆盖成 100ms
+- 超时未被识别为退避触发 → 每次学术类查询白等 8 秒
+- `mergeSources` 用 `flat()` → 前面的源独占预留槽位，后面的源永不出现
+- 空查询实际打到了上游 → 返回误导性的「页面结构可能已变更」
+- `maxResults=0` 却返回 1 条
+- 垂直源配额计算错误 → 2 源各请求 2 条却只预留 2 槽位，一半请求白打
+- 自适应配额允许**上浮** → 突破预留约束
+- 各源会用 `Math.min(Math.max(maxResults, 1), 10)` 产生 `NaN` 参数发给上游
+- `formatDateShort(-1)` 产出 `1969-12-31` 假日期
+- `truncated` 语义误报（「刚好填满」被当成「有内容被丢弃」）
+- GitHub 源对自然语言长句返回 ★0/★1 玩具仓库 → 加 MIN_STARS 阈值
+- TLS CA 注入未测 → 补 10 条测试（函数覆盖 40% → 100%）
+
+### 测试
+
+- **162 个用例**，行覆盖 **98.55%**
+- 含真实 Bing 页面快照（`test/fixtures/bing-real.html`），避免「只在自造数据上通过」
+- `test/pin-guard.test.mjs` 锁死防烧积分的 pin 约束
+
+---
+
+## [0.3.0] — 2026-09-29
+
+内部版本。单文件起步（185 行），抓取 Bing 页面解析，解决本机搜索整体不可用的
+CA 信任链问题。
+
+[1.0.0]: https://github.com/husongzhen/dsh-web-search-zerokey/releases/tag/v1.0.0

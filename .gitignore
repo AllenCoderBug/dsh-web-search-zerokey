@@ -1,0 +1,25 @@
+# 依赖
+node_modules/
+.pnpm-store/
+
+# 测试与覆盖率产物
+coverage/
+.nyc_output/
+*.lcov
+
+# 日志
+*.log
+npm-debug.log*
+yarn-error.log*
+
+# 编辑器 / 系统
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# 本地探针（约定前缀 zz-probe-，见贡献指南）
+zz-probe-*
+
+# npm 打包产物
+*.tgz
