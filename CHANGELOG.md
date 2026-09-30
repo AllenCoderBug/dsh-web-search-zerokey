@@ -6,6 +6,27 @@
 
 ---
 
+## [1.0.1] — 2026-09-30
+
+### 修复
+
+- **README 顶部的安装命令是错的** —— 写成了
+  `dsh plugin --profile desktop add ...`，但 `desktop` profile 由桌面 App 独占管理，
+  该命令会被明确拒绝：
+  ```
+  error: profile "desktop" is managed exclusively by the Electron application
+  ```
+  1.0.0 时只修正了「安装」章节，**漏改了顶部「快速开始」那段**，
+  导致照抄顶部命令的用户会直接撞报错。现已统一。
+
+### 说明
+
+- 桌面版与 Web/TUI 版的安装方式**不同**，README 已分两条路径写清：
+  - 桌面版（Electron）：GUI 插件市场安装，或手工改 `bundles` + `cordis.patch.yml`
+  - Web / TUI 版（CLI）：`dsh plugin --profile web add <pkg>`
+
+---
+
 ## [1.0.0] — 2026-09-30
 
 首个公开发布版。**核心承诺：零 key —— 不填任何 API key、不启任何本地服务、不消耗模型积分。**

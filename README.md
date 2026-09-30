@@ -5,10 +5,16 @@
 不填任何 API key · 不启任何本地服务 · 不消耗模型积分。
 
 ```bash
-dsh plugin --profile desktop add dsh-web-search-zerokey
+# 桌面版：在 GUI 的「插件市场」里搜索 zerokey 安装
+# Web / TUI 版：
+dsh plugin --profile web add dsh-web-search-zerokey
 ```
 
 装完直接就能搜。**没有第二步**——不需要去申请 key，不需要填配置，不需要起 Docker。
+
+> ⚠️ 桌面版的 profile 叫 `desktop`，但**不能用 CLI 装** —— 会被
+> `error: profile "desktop" is managed exclusively by the Electron application` 拒绝。
+> 详见下方[安装](#安装)章节。
 
 ---
 
