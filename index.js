@@ -81,24 +81,55 @@ export { AdaptationStore, defaultStatePath } from './lib/adapt.js'
  *   自己裸 fetch 会把这层防护全部绕过 —— 对「抓取搜索结果里的任意 URL」
  *   这种场景，等于把 SSRF 风险直接引进来。
  *
- * 返回结构（读自宿主源码，非猜测）：
+ * 宿主返回结构（读自 asar 内源码，非猜测）：
  *   { url, statusCode, body: { kind: 'html'|'text', content: string }, truncated }
+ *
+ * ⚠️ 为什么结构不匹配时要**抛错**而不是返回空字符串：
+ *   返回空串会被上层判定为「壳页」—— 表现为「抓到了但没内容」，
+ *   这是**看起来正常的失败**，会把「宿主接口变了」伪装成「目标站是 SPA」，
+ *   让排查方向完全跑偏。抛错则能在日志里直指真正原因。
+ *   （本机已有同类教训：静默降级让一个「功能其实是假的」bug 存活很久。）
  *
  * @param {{fetch: Function}} web - ctx.web
  * @returns {(url: string, signal?: AbortSignal) => Promise<string>}
  */
 export function adaptHostFetcher(web) {
   return async (url, signal) => {
+    if (web === undefined || typeof web.fetch !== 'function') {
+      throw new Error(
+        'ctx.web.fetch 不可用：正文增强需要宿主 fetchProvider（含 SSRF 防护）。' +
+          '请确认 profile 的 web 条目配置了 fetchProvider。',
+      )
+    }
+
     const result = await web.fetch({ url }, signal)
+
     const body = result?.body
-    if (body && typeof body === 'object' && typeof body.content === 'string') {
+    if (body !== null && typeof body === 'object' && typeof body.content === 'string') {
       return body.content
     }
     // 兼容：若某版本直接返回字符串
     if (typeof body === 'string') return body
     if (typeof result === 'string') return result
-    return ''
+
+    throw new Error(
+      '无法解析 ctx.web.fetch 的返回结构（期望 { body: { content } }）。' +
+        `实际收到: ${describeShape(result)}。` +
+        '这通常意味着宿主 fetchProvider 接口发生变更，请检查 dsh-web-fetch-http 版本。',
+    )
   }
+}
+
+/** 给错误信息用的结构描述（只描述形状，不回显内容）。 */
+function describeShape(value) {
+  if (value === null) return 'null'
+  if (value === undefined) return 'undefined'
+  const t = typeof value
+  if (t !== 'object') return t
+  const keys = Object.keys(value).slice(0, 8)
+  const bodyKeys =
+    value.body && typeof value.body === 'object' ? Object.keys(value.body).slice(0, 8) : null
+  return `{ ${keys.join(', ')} }${bodyKeys ? ` / body: { ${bodyKeys.join(', ')} }` : ''}`
 }
 
 /**
