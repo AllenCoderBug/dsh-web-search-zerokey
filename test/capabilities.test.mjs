@@ -9,6 +9,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
 import { classifyQuery, routeSources } from '../lib/route.js'
+import { planVerticalQuota, computeReserve, MAX_RESERVE } from '../lib/merge.js'
 import {
   TtlCache,
   MinIntervalLimiter,
@@ -638,4 +639,74 @@ test('AdaptationStore: save 在 dirty=false 时不写盘（幂等）', () => {
   } finally {
     fs.rmSync(dir, { recursive: true, force: true })
   }
+})
+
+// ---------------------------------------------------------------------------
+// 垂直源配额规划（防请求浪费）
+// ---------------------------------------------------------------------------
+
+test('planVerticalQuota: 生效源数×每源 必不超过预留（防请求白打）', () => {
+  // 实测踩到：2 个源各请求 2 条（共 4 条），却只预留 2 个槽位 ——
+  // 交错后只有前 2 条能进结果，一半请求被丢弃。
+  // 这不只是浪费：多发请求就多一分暴露面，而结果并没有变多。
+  //
+  // 注意「生效源数」= min(源数, 预留)：当 maxResults 极小、预留少于源数时，
+  // 生产代码会用 maxSources 把实际启用的源数压到预留以内（见 provider.js）。
+  // 故这里断言的是生效源数，而非传入的源数。
+  for (const maxResults of [1, 3, 5, 8, 10, 15, 20]) {
+    for (const sourceCount of [1, 2, 3, 4, 5]) {
+      const { reserve, perSource } = planVerticalQuota(maxResults, sourceCount)
+      const effectiveSources = Math.min(sourceCount, reserve)
+      assert.ok(
+        effectiveSources * perSource <= reserve,
+        `max=${maxResults} 源=${sourceCount}: 生效 ${effectiveSources}×${perSource} 超过预留 ${reserve}`,
+      )
+    }
+  }
+})
+
+test('planVerticalQuota: 预留至少容纳每源 1 条（否则有源被完全浪费）', () => {
+  for (const sourceCount of [1, 2, 3, 4]) {
+    const { reserve } = planVerticalQuota(20, sourceCount)
+    assert.ok(
+      reserve >= Math.min(sourceCount, MAX_RESERVE),
+      `${sourceCount} 个源应至少有 ${Math.min(sourceCount, MAX_RESERVE)} 个预留，实际 ${reserve}`,
+    )
+  }
+})
+
+test('provider: 路由源数上限与配额规划一致（防失配）', async () => {
+  // 若路由返回的源数超过预留能容纳的量，多出的请求会被丢弃（白打）。
+  // 生产代码用 maxSources 把源数限死，这里验证两者确实一致。
+  const lines = await import('node:fs').then((fs) =>
+    fs.readFileSync(new URL('../lib/provider.js', import.meta.url), 'utf8'),
+  )
+  assert.match(lines, /maxSources:\s*MAX_VERTICAL_SOURCES/, '路由应显式传 maxSources')
+  assert.match(lines, /planVerticalQuota\(maxResults, routed\.length\)/, '配额应按实际源数规划')
+})
+
+test('planVerticalQuota: 无源或无数上限时返回零', () => {
+  assert.deepEqual(planVerticalQuota(10, 0), { reserve: 0, perSource: 0 })
+  assert.deepEqual(planVerticalQuota(0, 3), { reserve: 0, perSource: 0 })
+})
+
+test('planVerticalQuota: 每源至少 1 条（否则源等于没参与）', () => {
+  const { perSource } = planVerticalQuota(10, 10)
+  assert.ok(perSource >= 1, '源再多，每源也应至少请求 1 条')
+})
+
+test('planVerticalQuota: 预留不超过上限（主源不能被垂直源挤空）', () => {
+  for (const maxResults of [10, 20, 50]) {
+    const { reserve } = planVerticalQuota(maxResults, 5)
+    assert.ok(reserve <= MAX_RESERVE, `预留 ${reserve} 超过上限 ${MAX_RESERVE}`)
+    assert.ok(reserve <= Math.max(1, Math.floor(maxResults / 2)), '主源应保住至少一半槽位')
+  }
+})
+
+test('computeReserve: 给出源数时走新算法，不给时保持旧行为', () => {
+  // 新算法（带源数）
+  assert.equal(computeReserve(10, true, 2), planVerticalQuota(10, 2).reserve)
+  // 旧行为（不传源数）—— 保持向后兼容
+  assert.equal(computeReserve(10, true), 2)
+  assert.equal(computeReserve(10, false), 0)
 })

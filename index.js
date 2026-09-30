@@ -47,7 +47,7 @@ export { ZeroKeySearchProvider }
 export { stripTags, cap, parseBingDate, formatDateShort, unixSecondsToDate } from './lib/text.js'
 export { parseBingHtml } from './lib/parse/bing.js'
 export { classifyQuery, isTechQuery, routeSources } from './lib/route.js'
-export { interleave, mergeSources, computeReserve } from './lib/merge.js'
+export { interleave, mergeSources, computeReserve, planVerticalQuota, MAX_RESERVE } from './lib/merge.js'
 export {
   TtlCache,
   MinIntervalLimiter,
