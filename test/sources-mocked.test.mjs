@@ -139,7 +139,14 @@ test('github: 429/403 标记 rateLimited（供上层冷却）', async () => {
 test('github: 忽略缺少 html_url 的条目', async () => {
   const gh = await import('../lib/sources/github.js')
   const r = await withFetch(
-    json({ items: [{ full_name: 'x/y' }, { full_name: 'a/b', html_url: 'https://github.com/a/b' }] }),
+    // 注意给足 star：本测试的意图是「缺 html_url 被忽略」，
+    // 不应被 MIN_STARS 过滤干扰（那是另一条测试的事）。
+    json({
+      items: [
+        { full_name: 'x/y', stargazers_count: 500 },
+        { full_name: 'a/b', html_url: 'https://github.com/a/b', stargazers_count: 500 },
+      ],
+    }),
     () => gh.search('q', { maxResults: 5 }),
   )
   assert.equal(r.sources.length, 1)
@@ -302,4 +309,44 @@ test('arxiv: 429 抛出并带 status（供冷却）', async () => {
     withFetch(json({}, 429), () => arxiv.search('q', { maxResults: 5 })),
     (e) => e.status === 429,
   )
+})
+
+test('github: 过滤低星噪音（回归：曾返回 ★0/★1 玩具仓库）', async () => {
+  // 实测：查询「python asyncio best practices」时 GitHub 返回 ★2/★1/★0/★0，
+  // 全是噪音 —— 会拖累整个源的可信度。
+  const gh = await import('../lib/sources/github.js')
+  const r = await withFetch(
+    json({
+      items: [
+        { full_name: 'noise/a', html_url: 'https://github.com/noise/a', stargazers_count: 2 },
+        { full_name: 'noise/b', html_url: 'https://github.com/noise/b', stargazers_count: 1 },
+        { full_name: 'noise/c', html_url: 'https://github.com/noise/c', stargazers_count: 0 },
+        {
+          full_name: 'good/repo',
+          html_url: 'https://github.com/good/repo',
+          stargazers_count: 778,
+        },
+      ],
+    }),
+    () => gh.search('q', { maxResults: 5 }),
+  )
+
+  assert.equal(r.sources.length, 1, '只应保留高于阈值的仓库')
+  assert.equal(r.sources[0].title, 'good/repo')
+  assert.ok(r.sources.every((s) => s.score >= 100), '不应残留低星条目')
+})
+
+test('github: 阈值边界（恰好等于阈值应保留）', async () => {
+  const gh = await import('../lib/sources/github.js')
+  const r = await withFetch(
+    json({
+      items: [
+        { full_name: 'edge/99', html_url: 'https://github.com/edge/99', stargazers_count: 99 },
+        { full_name: 'edge/100', html_url: 'https://github.com/edge/100', stargazers_count: 100 },
+      ],
+    }),
+    () => gh.search('q', { maxResults: 5 }),
+  )
+  assert.equal(r.sources.length, 1, '99 应被过滤，100 应保留')
+  assert.equal(r.sources[0].title, 'edge/100')
 })
