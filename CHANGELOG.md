@@ -6,6 +6,49 @@
 
 ---
 
+## [1.1.0] — 2026-09-30
+
+### 新增
+
+- **零依赖代码检查**（`npm run lint`，`scripts/lint.mjs`）——
+  语法 / 风格 / 结构 / 禁词四类检查，并接入 CI。
+
+  为什么不引 ESLint / Prettier：本项目承诺零 key 零依赖
+  （CI 有守护断言），而**需要的检查很少**。Node 自带的 `--check`
+  + 几十行脚本就够，省掉整套工具链的 lockfile 与配置维护成本。
+
+  检查项：语法（`node --check` 全量）· 单引号 / 无行尾分号 / 无 tab ·
+  `lib/` 模块必须有文件头注释 · 禁 `TODO`/`console.log`。
+
+  **已做负向验证**：故意注入 4 类错误（行尾分号 / tab / console / 语法错），
+  全部被抓到 —— 证明检查有效，不是摆设。
+
+### 重构
+
+- **`#maybeEnrich` 从 `provider.js` 移入 `enrich.js`**（`provider.js` 495 → 463 行）。
+
+  原来 enrich 的编排（缓存 key 构造、成功/失败统计、失败降级）住在
+  provider 里，而 `enrich.js` 自己的文件头声明「本模块通过依赖注入接收
+  fetcher，故它自身不含任何网络调用」。这导致**改 enrich 的缓存策略要动
+  provider** —— 两个变化理由被绑在一起，违反单一变化理由。
+
+  现收敛为一个 `enrichResult({ cache, stats, fetchText, log }, result, cfg, signal)`，
+  关注点归位。
+
+### 顺带修复
+
+- `lib/sources/bing.js` 的文件头注释被夹在两个 import 之间（规范上应在最前）。
+  lint 上线后第一时间发现。
+
+### 验证
+
+- lint：27 个文件全过
+- 测试：162/162
+- 覆盖率：行 98.56% / 函数 94.07%（未下降）
+- 真机搜索：Bing 6 + HN 2 + GitHub 2
+
+---
+
 ## [1.0.4] — 2026-09-30
 
 ### 修复
