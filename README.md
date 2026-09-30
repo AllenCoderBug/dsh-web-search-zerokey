@@ -106,10 +106,22 @@ stat -f "%Sm" ~/.dsh/profiles/desktop/node_modules/dsh-web-search-zerokey/lib/pr
 | `maxSnippetChars` | `500` | 单条摘要上限 |
 | `cacheTtlMs` | `300000` | 缓存 TTL |
 | `retries` | `2` | 幂等 GET 重试次数 |
-| `minIntervals` | 按源 | 覆盖各源最小请求间隔 |
+| `minIntervals` | 按源 | 覆盖各源最小请求间隔（见下表） |
 | `timeoutMs` | `12000` | 总超时 |
 
 ---
+
+### 各源限速的依据（不要随手调）
+
+| 源 | 间隔 | 依据 |
+|---|---|---|
+| `arxiv` | **3000ms** | **官方 ToU 硬性要求**（S 级）：「make no more than one request every three seconds」。详见 [arXiv API ToU](https://info.arxiv.org/help/api/tou.html)。违反会 429，且实测可能升级为整体不可达。**不可调低。** |
+| `bing` | 800ms | 实测校准：300ms 间隔 ×5 次全部 200；800ms ×8 次全部 200（无降级/验证码）。原 1200ms 是拍脑袋的 4 倍余量——实测连续 5 查询里有 4 次在纯等限速。 |
+| `juejin` / `csdn` | 800ms | 站点 API，受风控约束，且未单独压测，故与 Bing 同值。 |
+
+> ⚠️ **同一张表里两个值依据不同，不可类比。**
+> arXiv 是「官方规定」，Bing 是「实测校准」。
+> 前者不可动；后者如需调整，应重跑压测而不是凭感觉改。
 
 ## 降级行为
 
