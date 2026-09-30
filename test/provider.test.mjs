@@ -13,6 +13,7 @@ import assert from 'node:assert/strict'
 
 import { ZeroKeySearchProvider } from '../lib/provider.js'
 import { AdaptationStore } from '../lib/adapt.js'
+import { SingleFlight } from '../lib/request-policy.js'
 
 /** 构造一个假源表。 */
 function makeSources(spec) {
@@ -292,4 +293,90 @@ test('provider: 无 fetchText 时即使开启 includeContent 也安全跳过', a
   const r = await p.search({ query: 'x', maxResults: 3 }, undefined)
   assert.equal(r.sources.length, 3)
   assert.ok(r.sources.every((s) => s.content === undefined))
+})
+
+// ---------------------------------------------------------------------------
+// 并发（single-flight）
+// ---------------------------------------------------------------------------
+
+test('provider: 并发相同查询只打一次上游（回归：曾并发穿透缓存）', async () => {
+  // 实测踩到：10 个相同 query 并发时都查不到 TTL 缓存，
+  // 各自打一次上游（10 次请求）—— 这与「降低暴露面」直接冲突。
+  let calls = 0
+  const sources = makeSources({
+    bing: async () => {
+      calls++
+      await new Promise((r) => setTimeout(r, 30)) // 让并发窗口真实存在
+      return { sources: [{ url: 'https://b/1', title: 'B' }], truncated: false }
+    },
+  })
+  const p = new ZeroKeySearchProvider(() => ({}), { sources, ...silent() })
+
+  const rs = await Promise.all(
+    Array.from({ length: 10 }, () => p.search({ query: 'same query', maxResults: 3 }, undefined)),
+  )
+
+  assert.equal(calls, 1, `10 个并发相同查询应只打 1 次上游，实际 ${calls} 次`)
+  assert.ok(rs.every((r) => r.sources.length === 1), '所有调用者都应拿到结果')
+  assert.ok(p.singleFlight.stats.coalesced >= 8, '应记录到合并次数')
+})
+
+test('provider: 并发不同查询各自独立（不被误合并）', async () => {
+  let calls = 0
+  const sources = makeSources({
+    bing: async () => {
+      calls++
+      await new Promise((r) => setTimeout(r, 10))
+      return { sources: [{ url: `https://b/${Math.random()}`, title: 'B' }], truncated: false }
+    },
+  })
+  const p = new ZeroKeySearchProvider(() => ({}), { sources, ...silent() })
+
+  await Promise.all(
+    Array.from({ length: 5 }, (_, i) =>
+      p.search({ query: `distinct-${i}`, maxResults: 3 }, undefined),
+    ),
+  )
+  assert.equal(calls, 5, '不同查询必须各自请求，不能被 single-flight 误合并')
+})
+
+test('provider: single-flight 失败后不固化（下次会重新请求）', async () => {
+  let calls = 0
+  const sources = makeSources({
+    bing: async () => {
+      calls++
+      throw new Error('transient')
+    },
+  })
+  const p = new ZeroKeySearchProvider(() => ({}), { sources, ...silent() })
+
+  await assert.rejects(p.search({ query: 'x', maxResults: 3 }, undefined))
+  const afterFirst = calls
+  await assert.rejects(p.search({ query: 'x', maxResults: 3 }, undefined))
+
+  // 注意：单次 search 内部会按 retries 重试（网络错误默认可重试），
+  // 故 calls 不是 1 —— 这里验证的是「第二次 search 仍会真的再打上游」，
+  // 即失败没有被 single-flight 固化。
+  assert.ok(afterFirst >= 1, '首次应真的调用上游')
+  assert.equal(calls, afterFirst * 2, '第二次搜索应重新请求（失败不固化）')
+  assert.equal(p.singleFlight.stats.inflight, 0, '失败后 in-flight 表应清空')
+})
+
+test('SingleFlight: 直接验证合并语义', async () => {
+  const sf = new SingleFlight()
+  let n = 0
+  const produce = () =>
+    sf.run('k', async () => {
+      n++
+      await new Promise((r) => setTimeout(r, 20))
+      return n
+    })
+
+  const [a, b, c] = await Promise.all([produce(), produce(), produce()])
+  assert.equal(n, 1)
+  assert.equal(a, 1)
+  assert.equal(b, 1)
+  assert.equal(c, 1)
+  assert.equal(sf.stats.coalesced, 2)
+  assert.equal(sf.stats.inflight, 0, '结束后应清空 in-flight 表')
 })
