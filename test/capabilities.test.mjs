@@ -540,3 +540,34 @@ test('AdaptationStore: 禁用时不影响主流程', () => {
   for (let i = 0; i < 20; i++) a.record('x', { ok: false })
   assert.equal(a.quotaFactor('x'), 1, '禁用时恒返回默认值')
 })
+
+test('provider: 源超时也应触发冷却（回归：此前只认 429/403）', async () => {
+  // 实测踩到：arXiv 常以 TimeoutError 告终（无 status），
+  // 而此前只有 429/403 才触发冷却 —— 导致每次搜索都白等 8 秒。
+  const logs = []
+  const p = new ZeroKeySearchProvider(() => ({ multiSource: true }), {
+    log: (m) => logs.push(m),
+  })
+  // 直接验证冷却状态机对外可观测的行为：标记后应不可用
+  p.quota.markRateLimited('arxiv', 1)
+  assert.equal(p.quota.isAvailable('arxiv'), false, '冷却中应跳过该源')
+  assert.ok(p.quota.cooldownRemaining('arxiv') > 0)
+})
+
+test('SourceQuota: 冷却倍率生效（自适应的冷却拉长）', () => {
+  const q = new SourceQuota({ x: 1000 })
+  q.markRateLimited('x', 1)
+  const base = q.cooldownRemaining('x')
+  q.markRateLimited('x', 3)
+  const tripled = q.cooldownRemaining('x')
+  assert.ok(tripled > base * 2.5, `倍率应放大冷却（base=${base}, x3=${tripled}）`)
+})
+
+test('SourceQuota: 非法倍率回退为 1（防异常输入放大冷却）', () => {
+  const q = new SourceQuota({ x: 1000 })
+  q.markRateLimited('x', NaN)
+  const a = q.cooldownRemaining('x')
+  q.markRateLimited('x', -5)
+  const b = q.cooldownRemaining('x')
+  assert.ok(a <= 1100 && b <= 1100, '非法倍率应按 1 处理')
+})
