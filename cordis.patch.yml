@@ -1,16 +1,28 @@
 # dsh-web-search-zerokey — bundle patch 层
 #
-# 本文件把本插件插入 Cordis 组合。
+# 本文件把本插件插入 Cordis 组合，并把 seam 的 searchProvider 指到它。
 #
-# ⚠️ 与 searxng 的写法不同：这里**不**声明 `- id: web` 覆盖。
+# ── 为什么这里可以直接写 `- id: web` ──────────────────────────────────
+# 层序（见 profile 的 cordis.yml 官方注释）：
+#     bundle patch  →  用户的 cordis.patch.yml  →  --patch overlay
+# 本文件属**最前**层，用户配置在后、会覆盖它。
+# ⇒ 带上这个 pin 既让「装完即用」成立，又不剥夺用户改主意的权利。
 #
-# 原因：seam 的选择规则是「恰好一个 provider 可用时自动选中；
-# 多个可用时必须显式指定，否则 WEB_PROVIDER_AMBIGUOUS」。
-# 本 provider 的 available() 恒为 true，所以一旦它与其它可用 provider 并存，
-# 就必须有人在 `web` 行显式指定 searchProvider。
+# ── 这个 pin 不只是「选个 provider」──────────────────────────────────
+# 官方搜索（deepseek-official）**每次搜索 = 一次完整模型 turn**，
+# 直接扣积分。而它默认在 base bundle 里且 available() 恒报可用。
+# 不显式指定的风险：seam 在「多个可用」时报 WEB_PROVIDER_AMBIGUOUS，
+# 或 fallback 到那个烧积分的后端。
 #
-# 这个决定不该由本插件替使用者做（它不知道自己会和谁共存），
-# 所以选择权留给上层 patch —— 见 handoff/README-CA修复说明.md。
+# 想换回官方搜索：在你自己的 cordis.patch.yml 里覆写 `web` 行即可。
 - insert:
     - id: web-search-zerokey
       name: 'dsh-web-search-zerokey'
+
+# ⚠️ patch 是**整块替换** config，不是合并（官方文档原文：
+#    "a later patch can replace that row's complete config"）。
+# 故这里必须**完整重述** base 里的另一项 fetchProvider —— 漏了它抓取就坏。
+- id: web
+  config:
+    searchProvider: zerokey
+    fetchProvider: http

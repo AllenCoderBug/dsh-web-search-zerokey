@@ -6,6 +6,32 @@
 
 ---
 
+## [1.0.3] — 2026-09-30
+
+### 新增
+
+- **插件自带 provider 绑定** —— 装完即用，不再需要用户手工编辑
+  `cordis.patch.yml`。
+
+  依据（本机 profile 的 `cordis.yml` 官方注释）：
+  ```
+  层序：bundle patch → 用户的 cordis.patch.yml → --patch overlay
+  ```
+  插件的 patch 属**最前**层，用户配置在后、会覆盖它 ——
+  所以自带绑定既让「装完即用」成立，又不剥夺用户改主意的权利。
+
+  ⚠️ 同时**必须完整重述 `fetchProvider`**：patch 是**整块替换** config
+  而非合并（官方文档原文「a later patch can replace that row's complete
+  config」），漏了它抓取会坏。
+
+### 文档
+
+- README 安装章节重排：**桌面版 GUI 安装放第一位**（照 `dsh-context` 等
+  头部插件的写法）。此前把 npm 放第一，但普通用户最该用的是 GUI。
+- 新增「关于 provider 绑定」章节，说明如何改回官方搜索。
+
+---
+
 ## [1.0.2] — 2026-09-30
 
 ### 文档
