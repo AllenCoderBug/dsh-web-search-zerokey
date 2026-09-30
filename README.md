@@ -111,6 +111,16 @@ stat -f "%Sm" ~/.dsh/profiles/desktop/node_modules/dsh-web-search-zerokey/lib/pr
 
 ---
 
+## 请求去重（两层）
+
+| 层 | 作用 | 实测 |
+|---|---|---|
+| **SingleFlight** | 同键**并发**合并（TTL 缓存挡不住并发穿透） | 10 个相同查询并发 → 上游 **10 → 1 次** |
+| **TTL 缓存** | 跨时间的同查询复用 | 重复查询 940ms → **2ms** |
+
+为什么两层都要：只有 TTL 时，N 个相同查询同时到达会**各自打一次上游**
+（都查不到缓存）——这不只是浪费，且「同查询短时高频重复」正是被风控盯上的形态。
+
 ## 自适应（自进化）
 
 把已观测到的事实转成下一次的调度决策：
@@ -155,7 +165,11 @@ node ~/Documents/myprojects/mind/handoff/dsh-web-search-zerokey/scripts/verify.m
 node --test "test/*.test.mjs"    # Node 23+ 必须用 glob，传目录会 MODULE_NOT_FOUND
 ```
 
-覆盖：路由分类 / 缓存 / 限速 / 重试 / 各源解析 / 边界输入 / 自适应 / pin 护栏。
+覆盖：路由分类 / 缓存 / 限速 / 重试 / 各源解析 / 边界输入 / 自适应 / pin 护栏 /
+编排层（降级·配额·交错·冷却·并发合并）。
+
+当前：**122 个用例，行覆盖 96.36%**。含 `test/fixtures/bing-real.html`
+（真实 Bing 页面快照），避免「只在自造数据上通过」。
 
 ---
 
