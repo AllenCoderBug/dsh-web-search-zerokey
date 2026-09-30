@@ -126,6 +126,31 @@ test('MinIntervalLimiter: 不同 key 互不阻塞', async () => {
   assert.ok(Date.now() - t0 < 150, '不同 key 不应互相等待')
 })
 
+test('MinIntervalLimiter: 回归 — 按 key 隔离间隔，慢源不被快源覆盖', async () => {
+  // 实测踩到的 bug：间隔若是实例字段，调用方按源赋值会互相覆盖，
+  // 会让 arXiv 的 3000ms 官方限速被其他源的 800ms 顶掉（违反上游 ToU）。
+  const lim = new MinIntervalLimiter({ arxiv: 3000, default: 100 })
+  assert.equal(lim.intervalFor('arxiv'), 3000, 'arxiv 必须保住自己的间隔')
+  assert.equal(lim.intervalFor('other'), 100)
+
+  const marks = []
+  const t0 = Date.now()
+  await Promise.all([
+    lim.run('arxiv', async () => marks.push(Date.now() - t0)),
+    lim.run('other', async () => {}),
+    lim.run('arxiv', async () => marks.push(Date.now() - t0)),
+  ])
+  assert.ok(
+    marks[1] - marks[0] >= 2800,
+    `arxiv 两次请求间隔应 ≥2800ms，实际 ${marks[1] - marks[0]}ms`,
+  )
+})
+
+test('MinIntervalLimiter: 构造传单一数字时作为默认值', () => {
+  const lim = new MinIntervalLimiter(250)
+  assert.equal(lim.intervalFor('anything'), 250)
+})
+
 // ---------------------------------------------------------------------------
 // 重试
 // ---------------------------------------------------------------------------
