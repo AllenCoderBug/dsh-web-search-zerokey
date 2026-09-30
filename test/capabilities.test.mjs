@@ -16,7 +16,7 @@ import {
   isRetryableStatus,
   withRetry,
 } from '../lib/request-policy.js'
-import { parseBingDate, formatDateShort, unixSecondsToDate, cap, stripTags } from '../lib/text.js'
+import { parseBingDate, formatDateShort, unixSecondsToDate, cap, stripTags, normalizeLimit } from '../lib/text.js'
 import { parseJuejin } from '../lib/sources/juejin.js'
 import { parseCsdn } from '../lib/sources/csdn.js'
 import { parseArxivXml } from '../lib/sources/arxiv.js'
@@ -731,4 +731,53 @@ test('mergeSources: 全是重复 URL 时不报 truncated（去重不是截断）
   const r = mergeSources(dup, [], 10, 0)
   assert.equal(r.sources.length, 1)
   assert.equal(r.truncated, false, '去重丢弃的不是「因超限」，不该报截断')
+})
+
+// ---------------------------------------------------------------------------
+// normalizeLimit（边界缺陷修复）
+// ---------------------------------------------------------------------------
+
+test('normalizeLimit: 非法输入不产生 NaN（回归）', () => {
+  // 实测踩到：各源此前用 `Math.min(Math.max(maxResults, 1), 10)`，
+  // 但 **`Math.max(NaN, 1)` 仍是 NaN** —— 会向上游发出 `per_page=NaN` 这类畸形请求。
+  for (const bad of [undefined, null, NaN, 'abc', {}, []]) {
+    const n = normalizeLimit(bad)
+    assert.ok(Number.isFinite(n), `${JSON.stringify(bad)} 应得到有限值，实际 ${n}`)
+    assert.ok(n >= 1, '结果应 ≥ 1')
+  }
+})
+
+test('normalizeLimit: 夹在 [1, max] 且取整', () => {
+  assert.equal(normalizeLimit(0), 1)
+  assert.equal(normalizeLimit(-5), 1)
+  assert.equal(normalizeLimit(1000, 10), 10)
+  // 小数应取整，不透传给上游
+  assert.equal(normalizeLimit(1.7), 1)
+  assert.equal(normalizeLimit(9.9, 10), 9)
+  // 自定义上限与默认值
+  assert.equal(normalizeLimit(100, 15), 15)
+  assert.equal(normalizeLimit(undefined, 10, 3), 3)
+})
+
+test('各源对 maxResults 的边界处理一致（不产生 NaN）', async () => {
+  const mods = ['hackernews', 'github', 'npm', 'arxiv']
+  for (const name of mods) {
+    const m = await import(`../lib/sources/${name}.js`)
+    let captured
+    const orig = globalThis.fetch
+    globalThis.fetch = async (url) => {
+      captured = url
+      return { ok: true, status: 200, text: async () => '<feed></feed>', json: async () => ({}) }
+    }
+    try {
+      await m.search('q', { maxResults: NaN, maxSnippetChars: 100 })
+      const vals = [...captured.searchParams.values()]
+      assert.ok(
+        vals.every((v) => !/NaN/.test(v)),
+        `${name} 发出了含 NaN 的参数: ${captured.toString()}`,
+      )
+    } finally {
+      globalThis.fetch = orig
+    }
+  }
 })
